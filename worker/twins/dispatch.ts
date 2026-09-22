@@ -33,9 +33,18 @@ export async function runTwin(
 
   try {
     const generated = await generateTwinActions(script, ctx, llm);
-    if (!generated) return fallback;
+    if (!generated || generated.length === 0) {
+      console.log(JSON.stringify({ level: "warn", message: "twin.gemini.empty", script }));
+      return fallback;
+    }
     return mergeActions(script, ctx, generated, fallback);
-  } catch {
+  } catch (err) {
+    console.log(JSON.stringify({
+      level: "warn",
+      message: "twin.gemini.error",
+      script,
+      error: err instanceof Error ? err.message : "unknown",
+    }));
     return fallback;
   }
 }
@@ -47,7 +56,7 @@ function mergeActions(
   fallback: TwinAction[],
 ): TwinAction[] {
   const phase = detectPhase(script, ctx);
-  const actions = [...generated];
+  const actions = generated.filter((action) => script !== "planner" || action.type !== "artifact");
 
   if (script === "sql-reviewer" && phase === "review" && !actions.some((a) => a.type === "artifact")) {
     const artifact = fallback.find((a) => a.type === "artifact");

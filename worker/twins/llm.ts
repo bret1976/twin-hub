@@ -39,7 +39,7 @@ export async function generateTwinActions(
   const role =
     script === "planner"
       ? [
-          "Charter: frame the problem and invite a SQL specialist. You do not write or execute SQL.",
+          "Charter: frame the problem and invite a SQL specialist. You do not write SQL and you must not post an artifact.",
           phase === "open"
             ? "Phase OPEN: introduce the intent and attach the working DDL. Ask for exactly one index plus rationale."
             : "Phase ACCEPT: the specialist posted an artifact. Evaluate it against the intent. If it is a reasonable single CREATE INDEX, post a proposal then request_resolve.",
@@ -64,41 +64,73 @@ export async function generateTwinActions(
     user,
     json: true,
     temperature: 0.4,
-    maxOutputTokens: 900,
+    maxOutputTokens: 2048,
   });
-  if (!raw) return null;
-
-  let parsed: LlmEnvelope;
-  try {
-    parsed = JSON.parse(raw) as LlmEnvelope;
-  } catch {
+  if (!raw) {
+    console.log(JSON.stringify({ level: "warn", message: "twin.gemini.no_text", script, phase }));
     return null;
   }
-  if (!Array.isArray(parsed.actions)) return null;
+
+  const parsed = parseEnvelope(raw);
+  if (!parsed?.actions) {
+    console.log(JSON.stringify({ level: "warn", message: "twin.gemini.parse", script, phase, raw: raw.slice(0, 240) }));
+    return null;
+  }
 
   const actions: TwinAction[] = [];
   for (const item of parsed.actions.slice(0, 2)) {
-    const type = item.type;
-    const body = sanitizePeerText(item.body || "", 2500);
-    if (!body) continue;
+    const record = item as {
+      type?: string;
+      body?: string;
+      text?: string;
+      content?: string;
+      toId?: string;
+      payload?: { index?: string; rationale?: string };
+      artifact?: { index?: string; rationale?: string };
+    };
+    const type = String(record.type ?? "").toLowerCase();
+    const body = sanitizePeerText(record.body || record.text || record.content || "", 2500);
     if (type === "chat" || type === "proposal") {
+      if (!body) continue;
       actions.push({ type, body });
     } else if (type === "request_resolve") {
-      actions.push({ type: "request_resolve", body });
-    } else if (type === "handoff" && item.toId) {
-      actions.push({ type: "handoff", body, toId: item.toId });
+      actions.push({ type: "request_resolve", body: body || "Requesting human approval to resolve." });
+    } else if (type === "handoff" && (record.toId || item.toId)) {
+      actions.push({ type: "handoff", body: body || "Handing off.", toId: record.toId || item.toId || "" });
     } else if (type === "artifact") {
-      const index = String(item.payload?.index ?? "");
-      const rationale = String(item.payload?.rationale ?? "");
+      const blob = record.payload ?? record.artifact ?? {};
+      const index = String(blob.index ?? "");
+      const rationale = String(blob.rationale ?? "");
       if (!/CREATE\s+INDEX/i.test(index) || rationale.length < 8) continue;
       actions.push({
         type: "artifact",
-        body,
+        body: body || "Suggested one index.",
         payload: { index: index.trim(), rationale: sanitizePeerText(rationale, 800) },
       });
     }
   }
   return actions;
+}
+
+function parseEnvelope(raw: string): LlmEnvelope | null {
+  const trimmed = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+  try {
+    const value = JSON.parse(trimmed) as LlmEnvelope | TwinAction[];
+    if (Array.isArray(value)) return { actions: value };
+    if (value && Array.isArray(value.actions)) return value;
+    return null;
+  } catch {
+    const start = trimmed.indexOf("{");
+    const end = trimmed.lastIndexOf("}");
+    if (start >= 0 && end > start) {
+      try {
+        return JSON.parse(trimmed.slice(start, end + 1)) as LlmEnvelope;
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
 }
 
 export function detectPhase(script: ScriptKind, ctx: TwinContext): "open" | "accept" | "review" | "agree" | "done" {

@@ -69,6 +69,8 @@ interface AuditRow {
 }
 
 export class Room extends DurableObject<Env> {
+  private turnLock = false;
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     ctx.blockConcurrencyWhile(async () => this.migrate());
@@ -387,6 +389,21 @@ export class Room extends DurableObject<Env> {
   }
 
   private async runScriptedTurn(): Promise<void> {
+    if (this.turnLock) return;
+    const status = this.getMeta("status");
+    if (status !== "open") return;
+    if (this.getMeta("pendingGate")) return;
+    this.turnLock = true;
+    this.setMeta("lastTurnAt", String(Date.now()));
+    try {
+      await this.runScriptedTurnLocked();
+    } finally {
+      this.turnLock = false;
+      this.setMeta("lastTurnAt", String(Date.now()));
+    }
+  }
+
+  private async runScriptedTurnLocked(): Promise<void> {
     const status = this.getMeta("status");
     if (status !== "open") return;
     if (this.getMeta("pendingGate")) return;
