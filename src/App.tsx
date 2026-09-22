@@ -3,6 +3,7 @@ import { AccountPage } from "@/pages/AccountPage";
 import { BillingPage } from "@/pages/BillingPage";
 import { DiscoverPage } from "@/pages/DiscoverPage";
 import { FederationPage } from "@/pages/FederationPage";
+import { HomePage } from "@/pages/HomePage";
 import { MeetingsPage } from "@/pages/MeetingsPage";
 import { MemoryPage } from "@/pages/MemoryPage";
 import { RegistryPage } from "@/pages/RegistryPage";
@@ -12,6 +13,7 @@ import { api, type Health } from "@/lib/api";
 import { clearStoredSession, getStoredSessionId, type SessionOrg, type SessionUser } from "@/lib/session";
 
 type Route =
+  | "home"
   | "registry"
   | "discover"
   | "meetings"
@@ -32,7 +34,8 @@ function parseHash(): { route: Route; roomId: string | null } {
   if (raw === "memory") return { route: "memory", roomId: null };
   if (raw === "federation") return { route: "federation", roomId: null };
   if (raw === "settings") return { route: "settings", roomId: null };
-  return { route: "registry", roomId: null };
+  if (raw === "registry") return { route: "registry", roomId: null };
+  return { route: "home", roomId: null };
 }
 
 export default function App() {
@@ -95,6 +98,7 @@ export default function App() {
           <nav className="flex flex-wrap gap-1">
             {(
               [
+                ["home", "Home"],
                 ["registry", "Registry"],
                 ["discover", "Discover"],
                 ["meetings", "Meetings"],
@@ -125,6 +129,9 @@ export default function App() {
       </header>
 
       <main className="mx-auto max-w-6xl px-4 py-8">
+        {route === "home" && (
+          <HomePage onOpened={(id) => go("room", id)} onDiscover={() => go("discover")} />
+        )}
         {route === "registry" && <RegistryPage />}
         {route === "discover" && <DiscoverPage onOpened={(id) => go("room", id)} />}
         {route === "meetings" && <MeetingsPage onOpened={(id) => go("room", id)} />}
