@@ -85,7 +85,12 @@ async function route(request: Request, env: Env): Promise<Response> {
   const registry = env.REGISTRY.getByName("global") as DurableObjectStub<Registry>;
 
   if (request.method === "GET" && (path === "/health" || path === "/v1/health")) {
-    return json({ ok: true, service: "twinmeet" });
+    return json({
+      ok: true,
+      service: "twinmeet",
+      gemini: Boolean(env.GEMINI_API_KEY),
+      model: env.GEMINI_API_KEY ? env.GEMINI_MODEL || env.LLM_MODEL || "gemini-3.5-flash" : null,
+    });
   }
 
   if (request.method === "POST" && path === "/v1/seed") {

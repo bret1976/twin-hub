@@ -1,3 +1,10 @@
-# Optional. If unset, TwinMeet builds a deterministic joint summary from the transcript.
+# Optional. Never commit the real file (.dev.vars).
+# Twins never receive these values — only the Worker does.
+
+# Gemini (preferred): twins reason over the intent/DDL; resolve writes a Gemini summary.
+GEMINI_API_KEY=
+GEMINI_MODEL=gemini-3.5-flash
+
+# Optional OpenAI fallback for the joint summary only.
 OPENAI_API_KEY=
-LLM_MODEL=gpt-4o-mini
+LLM_MODEL=gemini-3.5-flash

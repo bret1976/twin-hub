@@ -1,3 +1,4 @@
+import { geminiGenerate } from "./gemini";
 import type { ArtifactRecord, JointSummary, RoomMember, RoomMessage } from "../types";
 
 export function templateSummary(input: {
@@ -45,24 +46,38 @@ export async function generateSummary(
     resolved: boolean;
     rounds: number;
   },
-  apiKey?: string,
-  model?: string,
+  keys?: { geminiKey?: string; openaiKey?: string; model?: string },
 ): Promise<JointSummary> {
   const fallback = templateSummary(input);
-  if (!apiKey) return fallback;
+  const transcript = input.messages
+    .map((m) => `${m.authorName} [${m.type}]: ${m.body}`)
+    .join("\n");
+  const artifact = input.artifacts[0]?.body ?? null;
+
+  if (keys?.geminiKey) {
+    const narrative = await geminiGenerate({
+      apiKey: keys.geminiKey,
+      model: keys.model,
+      temperature: 0.2,
+      maxOutputTokens: 700,
+      system:
+        "Write a concise joint meeting summary for TwinMeet. Mention the problem, who met, the artifact, and that a human approved resolve. No secrets, no tool calls, no markdown headings.",
+      user: `Intent: ${input.intent}\nParticipants: ${fallback.participants.join(", ")}\nArtifact: ${JSON.stringify(artifact)}\nTranscript:\n${transcript}`,
+    });
+    if (narrative) return { ...fallback, narrative, generatedBy: "gemini" };
+  }
+
+  if (!keys?.openaiKey) return fallback;
 
   try {
-    const transcript = input.messages
-      .map((m) => `${m.authorName} [${m.type}]: ${m.body}`)
-      .join("\n");
     const res = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
-        authorization: `Bearer ${apiKey}`,
+        authorization: `Bearer ${keys.openaiKey}`,
         "content-type": "application/json",
       },
       body: JSON.stringify({
-        model: model || "gpt-4o-mini",
+        model: keys.model || "gpt-4o-mini",
         temperature: 0.2,
         messages: [
           {

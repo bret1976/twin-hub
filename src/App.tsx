@@ -16,11 +16,19 @@ function parseHash(): { route: Route; roomId: string | null } {
 
 export default function App() {
   const [{ route, roomId }, setLoc] = useState(parseHash);
+  const [gemini, setGemini] = useState<{ on: boolean; model: string | null }>({ on: false, model: null });
 
   useEffect(() => {
     const onHash = () => setLoc(parseHash());
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+
+  useEffect(() => {
+    void fetch("/health")
+      .then((r) => r.json() as Promise<{ gemini?: boolean; model?: string | null }>)
+      .then((h) => setGemini({ on: Boolean(h.gemini), model: h.model ?? null }))
+      .catch(() => undefined);
   }, []);
 
   function go(next: Route, id?: string) {
@@ -37,7 +45,10 @@ export default function App() {
         <div className="mx-auto flex max-w-6xl flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <p className="font-serif text-xl tracking-tight">TwinMeet</p>
-            <p className="text-xs text-muted">MCP=tools, A2A=peers, TwinMeet=rooms+registry</p>
+            <p className="text-xs text-muted">
+              MCP=tools, A2A=peers, TwinMeet=rooms+registry
+              {gemini.on ? ` · Gemini ${gemini.model ?? "live"}` : " · scripted twins"}
+            </p>
           </div>
           <nav className="flex flex-wrap gap-1">
             {(

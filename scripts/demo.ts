@@ -144,7 +144,7 @@ async function waitForRoom(
   done: (snap: RoomSnapshot) => boolean,
 ): Promise<RoomSnapshot> {
   let last: RoomSnapshot | null = null;
-  for (let i = 0; i < 24; i++) {
+  for (let i = 0; i < 36; i++) {
     await api<{ room: RoomSnapshot }>(`/v1/rooms/${roomId}/tick`, { method: "POST" }).catch(() => undefined);
     const res = await api<{ room: RoomSnapshot }>(`/v1/rooms/${roomId}`);
     last = res.room;

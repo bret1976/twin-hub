@@ -12,7 +12,7 @@ PlannerTwin (NeedHelp, tags: `planning`) invites SqlReviewerTwin (HasSkill, tags
 - `Registry` DO — agents, capabilities, meeting requests, queryable audit
 - `Room` DO — one room per meeting: WebSocket hub, transcript, floor token, HITL gate
 - Vite + React + Tailwind dashboard (served as Worker static assets)
-- Scripted in-process twins (no paid LLM required)
+- Scripted in-process twins, optionally written by Gemini when `GEMINI_API_KEY` is set
 
 A Node + Postgres port is conceivable later: the room verbs are `open`, `postMessage`, `requestResolve`, `approve`, `escalate`, `getSnapshot`.
 
@@ -30,8 +30,10 @@ No Cloudflare account and no database are required for local demo. Durable Objec
 
 | Variable | Required | Purpose |
 | --- | --- | --- |
-| `OPENAI_API_KEY` | no | If set, resolve may ask an LLM to polish the joint summary. Unset → templated summary from the transcript. |
-| `LLM_MODEL` | no | Defaults to `gpt-4o-mini`. |
+| `GEMINI_API_KEY` | no | If set, twins reason over the real intent/DDL with Gemini, and resolve writes a Gemini joint summary. Unset → scripted twins + templated summary. |
+| `GEMINI_MODEL` | no | Defaults to `gemini-3.5-flash`. |
+| `OPENAI_API_KEY` | no | Optional fallback for the joint summary only. |
+| `LLM_MODEL` | no | Fallback model name (`gemini-3.5-flash` by default). |
 | `TWINMEET_URL` | no | Base URL for `npm run demo` (default `http://127.0.0.1:45454`). |
 | `TWINMEET_NO_START` | no | Set to `1` to make the demo fail instead of spawning `npm run dev`. |
 
@@ -56,7 +58,7 @@ npm run demo
 1. `POST /v1/seed` registers **NeedHelp** (`planner-twin`, tags `planning`) and **HasSkill** (`sql-reviewer-twin`, tags `sql`, `postgres`).
 2. `GET /v1/discover?intent=Review this toy DDL for a orders table and suggest one index.&tags=sql,postgres` — HasSkill is ranked first.
 3. `POST /v1/meeting-requests` with that intent and the sample `orders` DDL, then `POST /v1/meeting-requests/:id/accept` — a Room Durable Object opens.
-4. The scripted twins exchange messages (≤ 8 rounds). HasSkill posts an artifact:
+4. The twins exchange messages (≤ 8 rounds; Gemini-written when a key is set, otherwise scripted). HasSkill posts an artifact:
    ```json
    {
      "index": "CREATE INDEX idx_orders_customer_created ON orders (customer_id, created_at);",

@@ -45,14 +45,8 @@ export function RoomPage({ roomId }: { roomId: string }) {
     };
 
     poll = window.setInterval(() => {
-      void (async () => {
-        const snap = await refresh();
-        if (snap.status === "open" && !snap.pendingGate && snap.roundCount < snap.maxRounds) {
-          await api.tick(roomId).catch(() => undefined);
-          await refresh();
-        }
-      })();
-    }, 900);
+      void refresh();
+    }, 1200);
 
     return () => {
       cancelled = true;
@@ -221,6 +215,7 @@ export function RoomPage({ roomId }: { roomId: string }) {
                   {String(room.summary.resolved)}
                 </p>
                 <p className="text-paper-2">{room.summary.narrative}</p>
+                <p className="text-xs text-muted">Summary by {room.summary.generatedBy}</p>
               </>
             ) : (
               <p className="text-muted">Summary appears after human-approved resolve.</p>

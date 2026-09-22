@@ -2,7 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import { newId, nowIso } from "../lib/http";
 import { sanitizePeerText } from "../lib/sanitize";
 import { generateSummary } from "../lib/summary";
-import { runScriptedTwin } from "../twins/dispatch";
+import { runTwin } from "../twins/dispatch";
 import type { Registry } from "./registry";
 import type {
   ArtifactRecord,
@@ -351,8 +351,11 @@ export class Room extends DurableObject<Env> {
         resolved: true,
         rounds: snap.roundCount,
       },
-      this.env.OPENAI_API_KEY,
-      this.env.LLM_MODEL,
+      {
+        geminiKey: this.env.GEMINI_API_KEY,
+        openaiKey: this.env.OPENAI_API_KEY,
+        model: this.env.GEMINI_MODEL || this.env.LLM_MODEL,
+      },
     );
     this.setMeta("summaryJson", JSON.stringify(summary));
     this.setMeta("status", "resolved");
@@ -409,7 +412,7 @@ export class Room extends DurableObject<Env> {
       members: this.listMembers(),
       transcript: this.listMessages(),
     };
-    const actions = runScriptedTwin(member.script as ScriptKind, ctx);
+    const actions = await runTwin(member.script as ScriptKind, ctx, geminiOptions(this.env));
     if (actions.length === 0) {
       this.setMeta("lastTurnAt", String(Date.now()));
       this.passFloor(member.id);
@@ -709,6 +712,11 @@ export class Room extends DurableObject<Env> {
       this.send(ws, event);
     }
   }
+}
+
+function geminiOptions(env: Env) {
+  if (!env.GEMINI_API_KEY) return undefined;
+  return { apiKey: env.GEMINI_API_KEY, model: env.GEMINI_MODEL || env.LLM_MODEL };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

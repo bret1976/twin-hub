@@ -59,7 +59,7 @@ export interface JointSummary {
   resolved: boolean;
   rounds: number;
   narrative: string;
-  generatedBy: "template" | "llm";
+  generatedBy: "template" | "llm" | "gemini";
 }
 
 export interface RoomSnapshot {

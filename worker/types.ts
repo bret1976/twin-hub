@@ -14,6 +14,8 @@ export interface Env {
   REGISTRY: DurableObjectNamespace;
   ROOM: DurableObjectNamespace;
   OPENAI_API_KEY?: string;
+  GEMINI_API_KEY?: string;
+  GEMINI_MODEL?: string;
   LLM_MODEL?: string;
 }
 
@@ -110,7 +112,7 @@ export interface JointSummary {
   resolved: boolean;
   rounds: number;
   narrative: string;
-  generatedBy: "template" | "llm";
+  generatedBy: "template" | "llm" | "gemini";
 }
 
 export interface RoomSnapshot {

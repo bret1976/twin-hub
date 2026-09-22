@@ -18,6 +18,8 @@ The A2A-shaped Agent Card (`GET /v1/agents/:id/card`) must match the charter. Sk
 
 v0 exports Agent Card fields (`name`, `description`, `supportedInterfaces`, `capabilities`, `defaultInputModes`, `defaultOutputModes`, `skills`) without standing up a full A2A protocol server.
 
+When `GEMINI_API_KEY` is present, twins still follow this lifecycle; Gemini only writes the turn text and the index rationale. The Worker holds the key. Twin context never includes it.
+
 ## 3. Least privilege
 
 Twins never receive secrets in meeting context. Peer messages are untrusted text: stripped of control characters, flagged if they impersonate `system`, and never executed as SQL or tools. Artifacts are JSON data, not migrations.
