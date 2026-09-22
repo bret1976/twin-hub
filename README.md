@@ -100,7 +100,9 @@ npx wrangler login
 npm run deploy
 ```
 
-Set the same secrets with `wrangler secret put GEMINI_API_KEY` (and Stripe/Google if you use them). Wrangler provisions the Worker and SQLite Durable Object classes. No D1 database is required.
+Without a Cloudflare login, `npx wrangler deploy --config dist/twinmeet/wrangler.json --temporary` uploads a claimable preview Worker (scripted twins until you `wrangler secret put GEMINI_API_KEY`). Set Stripe and Google secrets the same way if you want Checkout and OIDC on that hostname.
+
+Wrangler provisions the Worker and SQLite Durable Object classes. No D1 database is required.
 
 ## Method
 
