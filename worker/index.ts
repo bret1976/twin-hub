@@ -2,6 +2,7 @@ import { toAgentCard, toPublicAgent } from "./lib/card";
 import { error, json, parseTags, readJson, withCors, nowIso } from "./lib/http";
 import { clearSessionCookie, readSessionId, sessionCookie } from "./lib/auth";
 import { embedText } from "./lib/embeddings";
+import { geminiGenerate, twinMode } from "./lib/gemini";
 import { handleA2A, platformCard } from "./lib/a2a";
 import { handleMcp } from "./lib/mcp";
 import { handleEchoTwin } from "./lib/hooks";
@@ -122,11 +123,14 @@ async function route(request: Request, env: Env): Promise<Response> {
   const session = await optionalSession(request, registry);
 
   if (request.method === "GET" && (path === "/health" || path === "/v1/health")) {
+    const mode = twinMode(env);
     return json({
       ok: true,
       service: "twinmeet",
       gemini: Boolean(env.GEMINI_API_KEY),
-      model: env.GEMINI_API_KEY ? env.GEMINI_MODEL || env.LLM_MODEL || "gemini-3.5-flash" : null,
+      geminiConfigured: Boolean(env.GEMINI_API_KEY),
+      twinMode: mode,
+      model: mode === "gemini" ? env.GEMINI_MODEL || env.LLM_MODEL || "gemini-3.5-flash" : null,
       embeddings: Boolean(env.GEMINI_API_KEY),
       a2a: true,
       mcp: true,
@@ -315,10 +319,12 @@ async function route(request: Request, env: Env): Promise<Response> {
       return error(400, "intent or tags is required");
     }
     let queryEmbedding: number[] | null = null;
+    let expanded = tags;
     if (intent && env.GEMINI_API_KEY) {
       queryEmbedding = await embedText(env.GEMINI_API_KEY, intent);
+      if (tags.length === 0) expanded = await expandIntentTags(env, intent);
     }
-    const results = await registry.discover(intent, tags, queryEmbedding, orgId);
+    const results = await registry.discover(intent, expanded, queryEmbedding, orgId);
     return json({
       results: results.map((hit) => ({ ...hit, agent: toPublicAgent(hit.agent) })),
     });
@@ -338,6 +344,35 @@ async function route(request: Request, env: Env): Promise<Response> {
       orgId: body.orgId || session?.org.id || DEMO_ORG_ID,
     });
     return json({ meetingRequest: meeting }, 201);
+  }
+
+  if (request.method === "POST" && path === "/v1/meetings/start") {
+    const body = await readJson<MeetingBody & { requesterId?: string; inviteeId?: string }>(request);
+    if (!body.intent) return error(400, "intent is required");
+    await registry.seedDemo();
+    const requesterId = body.requesterId || "planner-twin";
+    let inviteeId: string | undefined = body.inviteeId;
+    const startTags = body.tags ?? [];
+    if (!inviteeId) {
+      const embedding = env.GEMINI_API_KEY ? await embedText(env.GEMINI_API_KEY, body.intent) : null;
+      const results = await registry.discover(body.intent, startTags, embedding, orgId);
+      inviteeId = results.find((h) => h.agent.id !== requesterId)?.agent.id;
+    }
+    if (!inviteeId) return error(404, "No peer found for this intent");
+    await assertCanOpenRoom(registry, orgId);
+    const meeting = await registry.proposeMeeting({
+      requesterId,
+      inviteeId,
+      inviteeIds: body.inviteeIds,
+      orgId,
+      intent: body.intent,
+      body: body.body,
+      tags: startTags,
+    });
+    const decided = await registry.decideMeeting(meeting.id, "accepted");
+    if (!decided.roomId) return error(500, "Accept did not create a room");
+    const snapshot = await openRoom(env, registry, decided, origin);
+    return json({ meetingRequest: decided, room: snapshot }, 201);
   }
 
   const accept = match(path, /^\/v1\/meeting-requests\/([^/]+)\/accept$/);
@@ -701,7 +736,16 @@ async function openRoom(
   const members: RoomMember[] = [];
   for (const id of unique) {
     const agent = await registry.getAgent(id);
-    if (agent) members.push(toMember(agent, joinedAt));
+    if (agent) {
+      const caps = await registry.listCapabilities(agent.id);
+      members.push(
+        toMember(
+          agent,
+          joinedAt,
+          caps.map((c) => `${c.name}: ${c.description}`),
+        ),
+      );
+    }
   }
   if (members.length < 2) throw new Error("Meeting agents not found");
   const memories = (await registry.listMemory(meeting.orgId || DEMO_ORG_ID)) as Array<{ narrative: string }>;
@@ -720,7 +764,7 @@ async function openRoom(
   });
 }
 
-function toMember(agent: AgentRecord, joinedAt: string): RoomMember {
+function toMember(agent: AgentRecord, joinedAt: string, skills: string[] = []): RoomMember {
   return {
     id: agent.id,
     name: agent.name,
@@ -730,8 +774,32 @@ function toMember(agent: AgentRecord, joinedAt: string): RoomMember {
     callbackUrl: agent.callbackUrl,
     callbackSecret: agent.callbackSecret,
     purpose: agent.purpose,
+    nonGoals: agent.nonGoals,
+    boundaries: agent.boundaries,
+    skills,
     joinedAt,
   };
+}
+
+async function expandIntentTags(env: Env, intent: string): Promise<string[]> {
+  if (!env.GEMINI_API_KEY) return [];
+  const raw = await geminiGenerate({
+    apiKey: env.GEMINI_API_KEY,
+    model: env.GEMINI_MODEL || env.LLM_MODEL,
+    json: true,
+    temperature: 0,
+    maxOutputTokens: 256,
+    system: "Extract 3 to 6 short lowercase skill tags for twin discovery. Return JSON {\"tags\":[...]} only.",
+    user: intent,
+  });
+  if (!raw) return [];
+  try {
+    const trimmed = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+    const parsed = JSON.parse(trimmed) as { tags?: string[] };
+    return (parsed.tags ?? []).map((t) => t.toLowerCase().trim()).filter(Boolean).slice(0, 6);
+  } catch {
+    return [];
+  }
 }
 
 function match(path: string, re: RegExp): RegExpMatchArray | null {

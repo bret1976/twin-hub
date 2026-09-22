@@ -3,14 +3,24 @@ export interface GeminiOptions {
   model?: string;
 }
 
-const FALLBACK_MODELS = ["gemini-3.5-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite"];
+export class GeminiHttpError extends Error {
+  constructor(
+    public status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "GeminiHttpError";
+  }
+}
+
+const FALLBACK_MODELS = ["gemini-3.5-flash", "gemini-2.0-flash", "gemini-3.5-flash-lite"];
 
 interface GeminiResponse {
   candidates?: Array<{
     content?: { parts?: Array<{ text?: string }> };
     finishReason?: string;
   }>;
-  error?: { message?: string };
+  error?: { message?: string; code?: number };
 }
 
 export async function geminiGenerate(
@@ -24,6 +34,7 @@ export async function geminiGenerate(
 ): Promise<string | null> {
   const models = unique([opts.model, ...FALLBACK_MODELS].filter((m): m is string => Boolean(m)));
   let lastError = "";
+  let lastStatus = 0;
 
   for (const model of models) {
     try {
@@ -50,6 +61,10 @@ export async function geminiGenerate(
       const data = (await res.json()) as GeminiResponse;
       if (!res.ok) {
         lastError = data.error?.message || `HTTP ${res.status}`;
+        lastStatus = res.status;
+        if (res.status === 401 || res.status === 429) {
+          throw new GeminiHttpError(res.status, lastError);
+        }
         if (res.status === 404) continue;
         return null;
       }
@@ -59,14 +74,20 @@ export async function geminiGenerate(
         .trim();
       if (text) return text;
     } catch (err) {
+      if (err instanceof GeminiHttpError) throw err;
       lastError = err instanceof Error ? err.message : "gemini failed";
     }
   }
 
   if (lastError) {
-    console.log(JSON.stringify({ level: "warn", message: "gemini.unavailable", detail: lastError.slice(0, 180) }));
+    console.log(JSON.stringify({ level: "warn", message: "gemini.unavailable", status: lastStatus, detail: lastError.slice(0, 180) }));
   }
   return null;
+}
+
+export function twinMode(env: { TWIN_MODE?: string; GEMINI_API_KEY?: string }): "gemini" | "scripted" {
+  if (env.TWIN_MODE === "scripted") return "scripted";
+  return env.GEMINI_API_KEY ? "gemini" : "scripted";
 }
 
 function unique(items: string[]): string[] {

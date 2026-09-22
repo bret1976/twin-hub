@@ -3,7 +3,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/input";
-import { api, type AuditEvent, type RoomSnapshot } from "@/lib/api";
+import { api, type AuditEvent, type Health, type RoomSnapshot } from "@/lib/api";
 import { formatTime } from "@/lib/utils";
 
 export function RoomPage({ roomId }: { roomId: string }) {
@@ -13,6 +13,7 @@ export function RoomPage({ roomId }: { roomId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  const [health, setHealth] = useState<Health | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
 
   async function refresh() {
@@ -30,6 +31,7 @@ export function RoomPage({ roomId }: { roomId: string }) {
     void refresh().catch((err: unknown) => {
       setError(err instanceof Error ? err.message : "Room load failed");
     });
+    void api.health().then(setHealth).catch(() => undefined);
 
     const proto = location.protocol === "https:" ? "wss" : "ws";
     ws = new WebSocket(`${proto}://${location.host}/v1/rooms/${roomId}/ws`);
@@ -120,6 +122,9 @@ export function RoomPage({ roomId }: { roomId: string }) {
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Badge variant={live === "live" ? "teal" : "gold"}>{live}</Badge>
+            <Badge variant={(room.twinMode ?? health?.twinMode) === "scripted" ? "gold" : "teal"}>
+              {(room.twinMode ?? health?.twinMode) === "scripted" ? "Scripted mode" : "Powered by Gemini"}
+            </Badge>
             <Badge variant="mute">
               round {room.roundCount}/{room.maxRounds}
             </Badge>
@@ -257,7 +262,7 @@ export function RoomPage({ roomId }: { roomId: string }) {
                 {JSON.stringify(room.artifacts[0].body, null, 2)}
               </pre>
             ) : (
-              <p className="text-sm text-muted">No artifact yet. HasSkill will post a CREATE INDEX.</p>
+              <p className="text-sm text-muted">No artifact yet. The specialist twin will post one when ready.</p>
             )}
           </CardContent>
         </Card>

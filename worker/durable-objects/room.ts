@@ -3,8 +3,8 @@ import { newId, nowIso } from "../lib/http";
 import { sanitizePeerText } from "../lib/sanitize";
 import { generateSummary } from "../lib/summary";
 import { callTwinWebhook } from "../lib/callback";
-import { runTwin } from "../twins/dispatch";
-import { runGenericTwin } from "../twins/generic";
+import { GeminiHttpError, twinMode } from "../lib/gemini";
+import { runAnyTwin } from "../twins/dispatch";
 import { embedText } from "../lib/embeddings";
 import type { Registry } from "./registry";
 import type {
@@ -19,7 +19,6 @@ import type {
   RoomMessage,
   RoomSnapshot,
   RoomStatus,
-  ScriptKind,
   TwinAction,
   VoteRecord,
 } from "../types";
@@ -42,6 +41,9 @@ interface MemberRow {
   callback_url: string | null;
   callback_secret: string | null;
   purpose: string | null;
+  non_goals: string | null;
+  boundaries: string | null;
+  skills_json: string | null;
   joined_at: string;
 }
 
@@ -162,6 +164,9 @@ export class Room extends DurableObject<Env> {
     this.ensureColumn("members", "callback_url", "TEXT");
     this.ensureColumn("members", "callback_secret", "TEXT");
     this.ensureColumn("members", "purpose", "TEXT");
+    this.ensureColumn("members", "non_goals", "TEXT");
+    this.ensureColumn("members", "boundaries", "TEXT");
+    this.ensureColumn("members", "skills_json", "TEXT");
   }
 
   private ensureColumn(table: string, column: string, spec: string): void {
@@ -238,7 +243,7 @@ export class Room extends DurableObject<Env> {
 
     for (const member of input.members) {
       this.ctx.storage.sql.exec(
-        `INSERT OR REPLACE INTO members (id, name, role, runtime, script, callback_url, callback_secret, purpose, joined_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT OR REPLACE INTO members (id, name, role, runtime, script, callback_url, callback_secret, purpose, non_goals, boundaries, skills_json, joined_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         member.id,
         member.name,
         member.role,
@@ -247,6 +252,9 @@ export class Room extends DurableObject<Env> {
         member.callbackUrl ?? null,
         member.callbackSecret ?? null,
         member.purpose ?? null,
+        member.nonGoals ?? null,
+        member.boundaries ?? null,
+        JSON.stringify(member.skills ?? []),
         member.joinedAt,
       );
     }
@@ -413,7 +421,7 @@ export class Room extends DurableObject<Env> {
 
   async joinMember(member: RoomMember): Promise<RoomSnapshot> {
     this.ctx.storage.sql.exec(
-      `INSERT OR REPLACE INTO members (id, name, role, runtime, script, callback_url, callback_secret, purpose, joined_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO members (id, name, role, runtime, script, callback_url, callback_secret, purpose, non_goals, boundaries, skills_json, joined_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       member.id,
       member.name,
       member.role,
@@ -422,6 +430,9 @@ export class Room extends DurableObject<Env> {
       member.callbackUrl ?? null,
       member.callbackSecret ?? null,
       member.purpose ?? null,
+      member.nonGoals ?? null,
+      member.boundaries ?? null,
+      JSON.stringify(member.skills ?? []),
       member.joinedAt,
     );
     this.appendMessage(
@@ -581,20 +592,35 @@ export class Room extends DurableObject<Env> {
       members: this.listMembers(),
       transcript: this.listMessages(),
       purpose: member.purpose || undefined,
+      nonGoals: member.nonGoals || undefined,
+      boundaries: member.boundaries || undefined,
+      skills: member.skills,
       memories,
     };
+    const mode = twinMode(this.env);
     let actions: TwinAction[] = [];
-    if (member.runtime === "http" && member.callbackUrl) {
-      actions = await callTwinWebhook(
-        member.callbackUrl,
-        member.callbackSecret,
-        { ...ctx, roomId: this.getMeta("id"), event: "floor.granted" },
-        this.getMeta("publicBase"),
-      );
-    } else if (member.script && member.script !== "generic") {
-      actions = await runTwin(member.script as ScriptKind, ctx, geminiOptions(this.env));
-    } else {
-      actions = await runGenericTwin(ctx, geminiOptions(this.env));
+    try {
+      if (member.runtime === "http" && member.callbackUrl) {
+        actions = await callTwinWebhook(
+          member.callbackUrl,
+          member.callbackSecret,
+          { ...ctx, roomId: this.getMeta("id"), event: "floor.granted" },
+          this.getMeta("publicBase"),
+        );
+      } else {
+        actions = await runAnyTwin(ctx, geminiOptions(this.env), mode, member.script);
+      }
+    } catch (err) {
+      if (err instanceof GeminiHttpError) {
+        await this.escalate(
+          "system",
+          err.status === 429
+            ? "Gemini rate-limited this turn (429). Room paused for a human."
+            : "Gemini rejected the API key (401). Room paused. Check GEMINI_API_KEY.",
+        );
+        return;
+      }
+      throw err;
     }
     if (actions.length === 0) {
       this.setMeta("lastTurnAt", String(Date.now()));
@@ -615,6 +641,10 @@ export class Room extends DurableObject<Env> {
   }
 
   private async applyAction(member: RoomMember, action: TwinAction): Promise<void> {
+    if (action.type === "needs_human") {
+      await this.escalate(member.id, action.body);
+      return;
+    }
     if (action.type === "request_resolve") {
       await this.requestResolve(member.id, action.body);
       return;
@@ -825,6 +855,7 @@ export class Room extends DurableObject<Env> {
       summary,
       votes: this.listVotes(),
       graph: this.listEdges(),
+      twinMode: twinMode(this.env),
       createdAt: this.getMeta("createdAt"),
     };
   }
@@ -842,6 +873,9 @@ export class Room extends DurableObject<Env> {
         callbackUrl: r.callback_url,
         callbackSecret: r.callback_secret,
         purpose: r.purpose,
+        nonGoals: r.non_goals,
+        boundaries: r.boundaries,
+        skills: r.skills_json ? (JSON.parse(r.skills_json) as string[]) : [],
         joinedAt: r.joined_at,
       }));
   }

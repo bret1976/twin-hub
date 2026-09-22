@@ -1,9 +1,13 @@
 # Optional. Never commit the real file (.dev.vars).
 # Twins never receive these values — only the Worker does.
 
-# Gemini (preferred): twins reason over the intent/DDL; resolve writes a Gemini summary.
+# Gemini (preferred): twins reason over the intent; resolve writes a Gemini summary.
+# Production: npx wrangler secret put GEMINI_API_KEY
+# Never paste this value into chat, rooms, or twin context.
 GEMINI_API_KEY=
 GEMINI_MODEL=gemini-3.5-flash
+# gemini (default when a key is present) | scripted (CI / no-key fallback)
+TWIN_MODE=gemini
 
 # Optional OpenAI fallback for the joint summary only.
 OPENAI_API_KEY=

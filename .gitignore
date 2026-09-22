@@ -32,3 +32,10 @@ dist-ssr
 # Agent scratch
 agent-tools
 uploads
+
+# Secrets — never commit
+*.secret.txt
+*.secret_*.txt
+**/*.secret.txt
+*.pem
+*.key

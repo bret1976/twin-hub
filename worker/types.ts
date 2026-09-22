@@ -23,6 +23,7 @@ export interface Env {
   STRIPE_SECRET_KEY?: string;
   STRIPE_WEBHOOK_SECRET?: string;
   PUBLIC_URL?: string;
+  TWIN_MODE?: "scripted" | "gemini";
 }
 
 export interface AgentRecord {
@@ -97,6 +98,9 @@ export interface RoomMember {
   callbackUrl: string | null;
   callbackSecret: string | null;
   purpose: string | null;
+  nonGoals: string | null;
+  boundaries: string | null;
+  skills: string[];
   joinedAt: string;
 }
 
@@ -147,6 +151,7 @@ export interface RoomSnapshot {
   summary: JointSummary | null;
   votes: VoteRecord[];
   graph: GraphEdge[];
+  twinMode?: "gemini" | "scripted";
   createdAt: string;
 }
 
@@ -228,6 +233,9 @@ export interface TwinContext {
   members: RoomMember[];
   transcript: RoomMessage[];
   purpose?: string;
+  nonGoals?: string;
+  boundaries?: string;
+  skills?: string[];
   memories?: string[];
 }
 
@@ -237,6 +245,7 @@ export type TwinAction =
   | { type: "artifact"; body: string; payload: Record<string, unknown> }
   | { type: "handoff"; body: string; toId: string }
   | { type: "request_resolve"; body: string }
+  | { type: "needs_human"; body: string }
   | { type: "vote"; body: string; subject: "artifact" | "resolve"; decision: "approve" | "reject" };
 
 export interface OpenRoomInput {

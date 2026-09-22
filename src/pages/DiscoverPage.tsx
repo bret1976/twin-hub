@@ -15,6 +15,13 @@ export function DiscoverPage({ onOpened }: { onOpened: (roomId: string) => void 
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  function inviteeList(): string[] {
+    return extraInvitees
+      .split(",")
+      .map((t) => t.trim())
+      .filter(Boolean);
+  }
+
   async function search() {
     setBusy(true);
     try {
@@ -32,10 +39,7 @@ export function DiscoverPage({ onOpened }: { onOpened: (roomId: string) => void 
   async function requestMeeting(inviteeId: string) {
     setBusy(true);
     try {
-      const extra = extraInvitees
-        .split(",")
-        .map((t) => t.trim())
-        .filter(Boolean);
+      const extra = inviteeList();
       const proposed = await api.propose({
         requesterId,
         inviteeId,
@@ -53,25 +57,75 @@ export function DiscoverPage({ onOpened }: { onOpened: (roomId: string) => void 
     }
   }
 
+  async function startCustom() {
+    if (!intent.trim()) {
+      setError("Describe the problem first.");
+      return;
+    }
+    setBusy(true);
+    try {
+      await api.seed();
+      const extra = inviteeList();
+      const started = await api.startMeeting({
+        intent: intent.trim(),
+        body,
+        tags: tags.split(",").map((t) => t.trim()).filter(Boolean),
+        requesterId,
+        inviteeId: hits[0] && hits[0].agent.id !== requesterId ? hits[0].agent.id : undefined,
+        inviteeIds: extra.length ? extra : undefined,
+      });
+      if (started.room?.id) onOpened(started.room.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Start meeting failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function useSeed() {
+    setIntent(DEMO_INTENT);
+    setTags("sql,postgres");
+    setBody(SAMPLE_DDL);
+  }
+
+  function useBlank() {
+    setIntent("");
+    setTags("");
+    setBody("");
+    setHits([]);
+  }
+
   return (
     <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
       <div className="space-y-4">
         <div>
           <h1 className="font-serif text-3xl">Discover & invite</h1>
           <p className="mt-1 text-sm text-muted">
-            Intent before invite. Hybrid ranking: tag overlap + BM25, plus Gemini embeddings when a
-            key is set. Add extra twin ids for an N-party room. Top demo result should be HasSkill.
+            Describe any problem in free text — not only the toy DDL seed. Hybrid ranking uses tag
+            overlap + BM25, plus Gemini embeddings and tag expansion when a key is set. Start a
+            meeting immediately, or rank peers first.
           </p>
         </div>
         <Card>
           <CardContent className="space-y-3 pt-4">
-            <label className="block text-xs uppercase tracking-wide text-muted">Intent</label>
-            <Textarea value={intent} onChange={(e) => setIntent(e.target.value)} />
-            <label className="block text-xs uppercase tracking-wide text-muted">Working material</label>
-            <Textarea className="font-mono text-xs" value={body} onChange={(e) => setBody(e.target.value)} />
+            <label className="block text-xs uppercase tracking-wide text-muted">Problem / intent</label>
+            <Textarea
+              placeholder="What should the twins solve together?"
+              value={intent}
+              onChange={(e) => setIntent(e.target.value)}
+            />
+            <label className="block text-xs uppercase tracking-wide text-muted">Working material (optional)</label>
+            <Textarea
+              className="font-mono text-xs"
+              placeholder="DDL, constraints, notes — treated as untrusted data"
+              value={body}
+              onChange={(e) => setBody(e.target.value)}
+            />
             <div className="grid gap-3 sm:grid-cols-2">
               <div>
-                <label className="mb-1 block text-xs uppercase tracking-wide text-muted">Tags</label>
+                <label className="mb-1 block text-xs uppercase tracking-wide text-muted">
+                  Tags (blank = Gemini expand)
+                </label>
                 <Input value={tags} onChange={(e) => setTags(e.target.value)} />
               </div>
               <div>
@@ -87,9 +141,20 @@ export function DiscoverPage({ onOpened }: { onOpened: (roomId: string) => void 
                 onChange={(e) => setExtraInvitees(e.target.value)}
               />
             </div>
-            <Button onClick={() => void search()} disabled={busy}>
-              {busy ? "Searching…" : "Discover peers"}
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button onClick={() => void search()} disabled={busy}>
+                {busy ? "Working…" : "Discover peers"}
+              </Button>
+              <Button variant="teal" onClick={() => void startCustom()} disabled={busy}>
+                Start meeting
+              </Button>
+              <Button variant="outline" onClick={useSeed} disabled={busy}>
+                Load SQL seed
+              </Button>
+              <Button variant="outline" onClick={useBlank} disabled={busy}>
+                Clear to free-text
+              </Button>
+            </div>
             {error && <p className="text-sm text-coral">{error}</p>}
           </CardContent>
         </Card>
@@ -99,7 +164,7 @@ export function DiscoverPage({ onOpened }: { onOpened: (roomId: string) => void 
         {hits.length === 0 && (
           <Card>
             <CardContent className="py-10 text-center text-sm text-muted">
-              No ranking yet. Run discover to see who should take the meeting.
+              No ranking yet. Discover peers, or start a meeting and TwinMeet will pick a specialist.
             </CardContent>
           </Card>
         )}

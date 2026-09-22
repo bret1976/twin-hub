@@ -99,6 +99,7 @@ export interface RoomSnapshot {
   summary: JointSummary | null;
   votes?: VoteRecord[];
   graph?: GraphEdge[];
+  twinMode?: "gemini" | "scripted";
   createdAt: string;
 }
 
@@ -144,6 +145,8 @@ export interface FederatedPeer {
 export interface Health {
   ok: boolean;
   gemini?: boolean;
+  geminiConfigured?: boolean;
+  twinMode?: "gemini" | "scripted";
   model?: string | null;
   embeddings?: boolean;
   a2a?: boolean;
@@ -205,6 +208,18 @@ export const api = {
   accept: (id: string) =>
     req<{ meetingRequest: MeetingRequest; room: RoomSnapshot }>(`/v1/meeting-requests/${id}/accept`, {
       method: "POST",
+    }),
+  startMeeting: (body: {
+    intent: string;
+    body?: string;
+    tags?: string[];
+    requesterId?: string;
+    inviteeId?: string;
+    inviteeIds?: string[];
+  }) =>
+    req<{ meetingRequest: MeetingRequest; room: RoomSnapshot }>("/v1/meetings/start", {
+      method: "POST",
+      body: JSON.stringify(body),
     }),
   decline: (id: string) =>
     req<{ meetingRequest: MeetingRequest }>(`/v1/meeting-requests/${id}/decline`, { method: "POST" }),

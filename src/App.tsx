@@ -7,10 +7,20 @@ import { MeetingsPage } from "@/pages/MeetingsPage";
 import { MemoryPage } from "@/pages/MemoryPage";
 import { RegistryPage } from "@/pages/RegistryPage";
 import { RoomPage } from "@/pages/RoomPage";
+import { SettingsPage } from "@/pages/SettingsPage";
 import { api, type Health } from "@/lib/api";
 import { clearStoredSession, getStoredSessionId, type SessionOrg, type SessionUser } from "@/lib/session";
 
-type Route = "registry" | "discover" | "meetings" | "room" | "account" | "billing" | "memory" | "federation";
+type Route =
+  | "registry"
+  | "discover"
+  | "meetings"
+  | "room"
+  | "account"
+  | "billing"
+  | "memory"
+  | "federation"
+  | "settings";
 
 function parseHash(): { route: Route; roomId: string | null } {
   const raw = window.location.hash.replace(/^#\/?/, "");
@@ -21,6 +31,7 @@ function parseHash(): { route: Route; roomId: string | null } {
   if (raw === "billing") return { route: "billing", roomId: null };
   if (raw === "memory") return { route: "memory", roomId: null };
   if (raw === "federation") return { route: "federation", roomId: null };
+  if (raw === "settings") return { route: "settings", roomId: null };
   return { route: "registry", roomId: null };
 }
 
@@ -75,7 +86,9 @@ export default function App() {
             <p className="font-serif text-xl tracking-tight">TwinMeet</p>
             <p className="text-xs text-muted">
               MCP=tools, A2A=peers, TwinMeet=rooms+registry
-              {health.gemini ? ` · Gemini ${health.model ?? "live"}` : " · scripted twins"}
+              {health.twinMode === "gemini" || (health.gemini && health.twinMode !== "scripted")
+                ? ` · Powered by Gemini ${health.model ?? ""}`
+                : " · Scripted mode"}
               {org ? ` · ${org.name} (${org.plan})` : ""}
             </p>
           </div>
@@ -88,6 +101,7 @@ export default function App() {
                 ["memory", "Memory"],
                 ["federation", "A2A/MCP"],
                 ["billing", "Billing"],
+                ["settings", "Settings"],
                 ["account", user ? "Workspace" : "Sign in"],
               ] as const
             ).map(([key, label]) => (
@@ -116,6 +130,7 @@ export default function App() {
         {route === "meetings" && <MeetingsPage onOpened={(id) => go("room", id)} />}
         {route === "memory" && <MemoryPage />}
         {route === "federation" && <FederationPage />}
+        {route === "settings" && <SettingsPage />}
         {route === "billing" && <BillingPage org={org} onOrg={onOrg} />}
         {route === "account" && (
           <AccountPage user={user} org={org} oidc={Boolean(health.oidc)} onSession={onSession} />

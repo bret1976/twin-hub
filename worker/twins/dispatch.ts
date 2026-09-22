@@ -1,11 +1,12 @@
 import type { ScriptKind, TwinAction, TwinContext } from "../types";
 import type { GeminiOptions } from "../lib/gemini";
 import { assertNoSecrets } from "../lib/sanitize";
-import { detectPhase, generateTwinActions } from "./llm";
+import { runCharterTwin } from "./brain";
 import { plannerAct } from "./planner";
 import { sqlReviewerAct } from "./sql-reviewer";
+import { runGenericTwin } from "./generic";
 
-export function runScriptedTwin(script: ScriptKind, ctx: TwinContext): TwinAction[] {
+export async function runScriptedTwin(script: ScriptKind, ctx: TwinContext): Promise<TwinAction[]> {
   assertNoSecrets({
     selfId: ctx.selfId,
     selfName: ctx.selfName,
@@ -19,7 +20,7 @@ export function runScriptedTwin(script: ScriptKind, ctx: TwinContext): TwinActio
     case "sql-reviewer":
       return sqlReviewerAct(ctx);
     default:
-      return [];
+      return runGenericTwin(ctx);
   }
 }
 
@@ -27,45 +28,34 @@ export async function runTwin(
   script: ScriptKind,
   ctx: TwinContext,
   llm?: GeminiOptions,
+  mode: "gemini" | "scripted" = llm?.apiKey ? "gemini" : "scripted",
 ): Promise<TwinAction[]> {
-  const fallback = runScriptedTwin(script, ctx);
-  if (!llm?.apiKey) return fallback;
+  assertNoSecrets({
+    selfId: ctx.selfId,
+    selfName: ctx.selfName,
+    intent: ctx.intent,
+    body: ctx.body,
+  });
 
-  try {
-    const generated = await generateTwinActions(script, ctx, llm);
-    if (!generated || generated.length === 0) {
-      console.log(JSON.stringify({ level: "warn", message: "twin.gemini.empty", script }));
-      return fallback;
-    }
-    return mergeActions(script, ctx, generated, fallback);
-  } catch (err) {
-    console.log(JSON.stringify({
-      level: "warn",
-      message: "twin.gemini.error",
-      script,
-      error: err instanceof Error ? err.message : "unknown",
-    }));
-    return fallback;
+  if (mode === "scripted" || !llm?.apiKey) {
+    return runScriptedTwin(script, ctx);
   }
+
+  const generated = await runCharterTwin(ctx, llm);
+  if (generated.length) return generated;
+  return runScriptedTwin(script, ctx);
 }
 
-function mergeActions(
-  script: ScriptKind,
+export async function runAnyTwin(
   ctx: TwinContext,
-  generated: TwinAction[],
-  fallback: TwinAction[],
-): TwinAction[] {
-  const phase = detectPhase(script, ctx);
-  const actions = generated.filter((action) => script !== "planner" || action.type !== "artifact");
-
-  if (script === "sql-reviewer" && phase === "review" && !actions.some((a) => a.type === "artifact")) {
-    const artifact = fallback.find((a) => a.type === "artifact");
-    if (artifact) actions.push(artifact);
+  llm?: GeminiOptions,
+  mode: "gemini" | "scripted" = llm?.apiKey ? "gemini" : "scripted",
+  script?: ScriptKind | null,
+): Promise<TwinAction[]> {
+  if (mode === "gemini" && llm?.apiKey) {
+    const generated = await runCharterTwin(ctx, llm);
+    if (generated.length) return generated;
   }
-
-  if (script === "planner" && phase === "accept" && !actions.some((a) => a.type === "request_resolve")) {
-    actions.push({ type: "request_resolve", body: "Requesting human approval to resolve." });
-  }
-
-  return actions.length ? actions : fallback;
+  if (script) return runScriptedTwin(script, ctx);
+  return runGenericTwin(ctx, mode === "gemini" ? llm : undefined);
 }
