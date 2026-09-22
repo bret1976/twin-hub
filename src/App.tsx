@@ -83,7 +83,7 @@ export default function App() {
     window.location.hash = next === "home" ? "#" : `#/${next}`;
   }
 
-  const chatMode = route === "home" || route === "room";
+  const chatMode = route === "room";
 
   return (
     <div className="min-h-screen bg-ink">
@@ -146,8 +146,10 @@ export default function App() {
         </div>
       </header>
 
-      <main className={chatMode ? "" : "mx-auto max-w-2xl px-4 py-8"}>
-        {route === "home" && <HomePage onOpened={(id) => go("room", id)} />}
+      <main className={chatMode ? "" : "mx-auto max-w-6xl px-4 py-8"}>
+        {route === "home" && (
+          <HomePage onOpened={(id) => go("room", id)} onDiscover={() => go("discover")} />
+        )}
         {route === "registry" && <RegistryPage />}
         {route === "discover" && <DiscoverPage onOpened={(id) => go("room", id)} />}
         {route === "meetings" && <MeetingsPage onOpened={(id) => go("room", id)} />}
