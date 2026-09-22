@@ -1,0 +1,3 @@
+# Optional. If unset, TwinMeet builds a deterministic joint summary from the transcript.
+OPENAI_API_KEY=
+LLM_MODEL=gpt-4o-mini
