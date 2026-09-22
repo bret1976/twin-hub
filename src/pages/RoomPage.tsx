@@ -1,15 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/input";
-import { api, type AuditEvent, type Health, type RoomSnapshot } from "@/lib/api";
-import { formatTime } from "@/lib/utils";
+import { api, type Health, type RoomMessage, type RoomSnapshot } from "@/lib/api";
 
-export function RoomPage({ roomId }: { roomId: string }) {
+export function RoomPage({ roomId, onHome }: { roomId: string; onHome?: () => void }) {
   const [room, setRoom] = useState<RoomSnapshot | null>(null);
-  const [audit, setAudit] = useState<AuditEvent[]>([]);
-  const [live, setLive] = useState<"connecting" | "live" | "polling">("connecting");
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
@@ -17,41 +12,30 @@ export function RoomPage({ roomId }: { roomId: string }) {
   const logRef = useRef<HTMLDivElement>(null);
 
   async function refresh() {
-    const [r, a] = await Promise.all([api.room(roomId), api.audit(roomId)]);
-    setRoom(r.room);
-    setAudit(a.events);
-    return r.room;
+    const res = await api.room(roomId);
+    setRoom(res.room);
+    return res.room;
   }
 
   useEffect(() => {
     let ws: WebSocket | null = null;
     let poll: number | undefined;
-    let cancelled = false;
-
     void refresh().catch((err: unknown) => {
-      setError(err instanceof Error ? err.message : "Room load failed");
+      setError(err instanceof Error ? err.message : "Chat failed to open");
     });
     void api.health().then(setHealth).catch(() => undefined);
 
     const proto = location.protocol === "https:" ? "wss" : "ws";
     ws = new WebSocket(`${proto}://${location.host}/v1/rooms/${roomId}/ws`);
-    ws.onopen = () => setLive("live");
     ws.onmessage = () => {
       void refresh();
-    };
-    ws.onerror = () => {
-      setLive("polling");
-    };
-    ws.onclose = () => {
-      if (!cancelled) setLive("polling");
     };
 
     poll = window.setInterval(() => {
       void refresh();
-    }, 1200);
+    }, 1100);
 
     return () => {
-      cancelled = true;
       ws?.close();
       if (poll) window.clearInterval(poll);
     };
@@ -61,31 +45,18 @@ export function RoomPage({ roomId }: { roomId: string }) {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight, behavior: "smooth" });
   }, [room?.messages.length]);
 
-  const floorName = useMemo(() => {
-    if (!room?.floorHolderId) return "none";
-    return room.members.find((m) => m.id === room.floorHolderId)?.name ?? room.floorHolderId;
-  }, [room]);
+  const twins = useMemo(() => (room?.members ?? []).filter((m) => m.role === "twin"), [room]);
+  const speaker = twins.find((m) => m.id === room?.floorHolderId);
+  const talking =
+    room?.status === "open" && !room.pendingGate && Boolean(speaker);
 
   async function onApprove(decision: "approve" | "reject") {
     setBusy(true);
     try {
       const res = await api.approve(roomId, decision);
       setRoom(res.room);
-      await refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Approve failed");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function onVote(subject: "artifact" | "resolve", decision: "approve" | "reject") {
-    setBusy(true);
-    try {
-      const res = await api.vote(roomId, subject, decision);
-      setRoom(res.room);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Vote failed");
+      setError(err instanceof Error ? err.message : "Could not finish");
     } finally {
       setBusy(false);
     }
@@ -105,219 +76,143 @@ export function RoomPage({ roomId }: { roomId: string }) {
     }
   }
 
-  if (!room && error) {
-    return <p className="text-coral">{error}</p>;
-  }
+  if (!room && error) return <p className="px-4 text-coral">{error}</p>;
   if (!room) {
-    return <p className="text-muted">Opening room…</p>;
+    return <p className="px-4 pt-16 text-center text-muted">The bots are sitting down…</p>;
   }
+
+  const visible = room.messages.filter((m) => m.type !== "audit");
+  const gemini = (room.twinMode ?? health?.twinMode) !== "scripted";
 
   return (
-    <div className="grid gap-4 xl:grid-cols-[minmax(0,1.4fr)_minmax(280px,0.8fr)]">
-      <div className="space-y-4">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h1 className="font-serif text-3xl">Live room</h1>
-            <p className="mt-1 text-sm text-muted">{room.intent}</p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge variant={live === "live" ? "teal" : "gold"}>{live}</Badge>
-            <Badge variant={(room.twinMode ?? health?.twinMode) === "scripted" ? "gold" : "teal"}>
-              {(room.twinMode ?? health?.twinMode) === "scripted" ? "Scripted mode" : "Powered by Gemini"}
-            </Badge>
-            <Badge variant="mute">
-              round {room.roundCount}/{room.maxRounds}
-            </Badge>
-            <Badge variant="gold">floor {floorName}</Badge>
-            <Badge variant={room.status === "resolved" ? "teal" : room.status === "paused" ? "coral" : "mute"}>
-              {room.status}
-            </Badge>
-          </div>
+    <div className="mx-auto flex h-[calc(100vh-4.5rem)] max-w-2xl flex-col px-3 sm:px-4">
+      <header className="flex items-start justify-between gap-3 py-3">
+        <div className="min-w-0">
+          <p className="truncate text-sm text-paper-2">{room.intent}</p>
+          <p className="mt-1 text-xs text-muted">
+            {twins.map((t) => t.name).join("  ·  ") || "Two twins"}
+            {gemini ? "  ·  Gemini" : "  ·  practice mode"}
+          </p>
         </div>
+        <button type="button" className="text-xs text-muted hover:text-paper" onClick={onHome}>
+          New chat
+        </button>
+      </header>
 
-        {error && <p className="text-sm text-coral">{error}</p>}
-
-        {room.pendingGate === "resolve" && (
-          <Card className="border-coral/50">
-            <CardContent className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <p className="font-medium text-coral">Human approval required</p>
-                <p className="text-sm text-muted">The room is paused. Approve to publish the joint summary.</p>
-              </div>
-              <div className="flex gap-2">
-                <Button disabled={busy} onClick={() => void onApprove("approve")}>
-                  Approve resolve
-                </Button>
-                <Button variant="outline" disabled={busy} onClick={() => void onApprove("reject")}>
-                  Keep talking
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
+      <div ref={logRef} className="min-h-0 flex-1 space-y-5 overflow-y-auto pb-4">
+        {visible.length === 0 && (
+          <p className="pt-10 text-center text-sm text-muted">Waiting for the first line…</p>
         )}
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Transcript</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div ref={logRef} className="max-h-[28rem] space-y-3 overflow-y-auto pr-1">
-              {room.messages.length === 0 && <p className="text-sm text-muted">Waiting for the twins to take the floor…</p>}
-              {room.messages.map((m) => (
-                <article key={m.id} className="rounded-md border border-rule/80 bg-ink px-3 py-2">
-                  <header className="mb-1 flex flex-wrap items-center gap-2 text-xs">
-                    <Badge variant={toneFor(m.type)}>{m.type}</Badge>
-                    <span className="text-paper">{m.authorName}</span>
-                    <span className="text-muted">{formatTime(m.createdAt)}</span>
-                  </header>
-                  <pre className="whitespace-pre-wrap font-sans text-sm leading-relaxed text-paper-2">{m.body}</pre>
-                  {m.payload != null && m.type === "artifact" && (
-                    <pre className="mt-2 overflow-x-auto font-mono text-xs text-gold">
-                      {JSON.stringify(m.payload, null, 2)}
-                    </pre>
-                  )}
-                </article>
-              ))}
-            </div>
-            {room.status !== "resolved" && room.pendingGate !== "resolve" && (
-              <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-                <Textarea
-                  className="min-h-16"
-                  placeholder="Watch-only humans can still leave a note…"
-                  value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
-                />
-                <Button variant="outline" disabled={busy} onClick={() => void send()}>
-                  Send
-                </Button>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+        {visible.map((m) => (
+          <Bubble key={m.id} message={m} twins={twins.map((t) => t.id)} />
+        ))}
+        {talking && (
+          <p className="pl-12 text-xs text-muted">{speaker?.name ?? "A twin"} is typing…</p>
+        )}
+        {room.summary && (
+          <div className="rounded-2xl border border-teal/30 bg-teal/10 px-4 py-3 text-sm leading-relaxed text-paper-2">
+            <p className="mb-1 text-xs font-medium uppercase tracking-wide text-teal">They agreed</p>
+            {room.summary.narrative}
+          </div>
+        )}
       </div>
 
-      <aside className="space-y-4">
-        <Card>
-          <CardHeader>
-            <CardTitle>Members</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-1 text-sm">
-            {room.members.map((m) => (
-              <p key={m.id}>
-                <span className="text-paper">{m.name}</span>{" "}
-                <span className="text-xs text-muted">
-                  {m.role}
-                  {m.runtime ? ` · ${m.runtime}` : ""}
-                </span>
-              </p>
-            ))}
-          </CardContent>
-        </Card>
+      {error && <p className="pb-2 text-sm text-coral">{error}</p>}
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Votes</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2 text-sm">
-            {(room.votes ?? []).length === 0 && <p className="text-muted">No votes yet.</p>}
-            {(room.votes ?? []).map((v) => (
-              <p key={`${v.voterId}-${v.subject}`}>
-                <span className="text-paper">{v.voterName}</span> {v.decision} {v.subject}
-              </p>
-            ))}
-            {room.status !== "resolved" && (
-              <div className="flex flex-wrap gap-2 pt-1">
-                <Button size="sm" variant="outline" disabled={busy} onClick={() => void onVote("artifact", "approve")}>
-                  Vote artifact
-                </Button>
-                <Button size="sm" variant="outline" disabled={busy} onClick={() => void onVote("resolve", "approve")}>
-                  Vote resolve
-                </Button>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+      {room.pendingGate === "resolve" && (
+        <div className="mb-3 rounded-2xl border border-rule bg-ink-2 px-4 py-3">
+          <p className="text-sm text-paper">They think they’re done. Good with that?</p>
+          <div className="mt-3 flex gap-2">
+            <Button disabled={busy} onClick={() => void onApprove("approve")}>
+              Yes, wrap it up
+            </Button>
+            <Button variant="outline" disabled={busy} onClick={() => void onApprove("reject")}>
+              Keep talking
+            </Button>
+          </div>
+        </div>
+      )}
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Speaker graph</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-1 font-mono text-xs text-muted">
-            {(room.graph ?? []).length === 0 && <p>Edges appear as twins hand off and mention each other.</p>}
-            {(room.graph ?? []).map((e) => (
-              <p key={`${e.fromId}-${e.toId}-${e.kind}`}>
-                {e.fromId} → {e.toId} {e.kind} ×{e.weight}
-              </p>
-            ))}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Artifact</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {room.artifacts[0] ? (
-              <pre className="overflow-x-auto font-mono text-xs text-teal">
-                {JSON.stringify(room.artifacts[0].body, null, 2)}
-              </pre>
-            ) : (
-              <p className="text-sm text-muted">No artifact yet. The specialist twin will post one when ready.</p>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Joint summary</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2 text-sm">
-            {room.summary ? (
-              <>
-                <p>
-                  <span className="text-muted">Problem. </span>
-                  {room.summary.problem}
-                </p>
-                <p>
-                  <span className="text-muted">Participants. </span>
-                  {room.summary.participants.join(", ")}
-                </p>
-                <p>
-                  <span className="text-muted">Resolved. </span>
-                  {String(room.summary.resolved)}
-                </p>
-                <p className="text-paper-2">{room.summary.narrative}</p>
-                <p className="text-xs text-muted">Summary by {room.summary.generatedBy}</p>
-              </>
-            ) : (
-              <p className="text-muted">Summary appears after human-approved resolve.</p>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Audit</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ol className="space-y-2 font-mono text-[11px] text-muted">
-              {audit.map((e) => (
-                <li key={e.id}>
-                  <span className="text-gold">{e.type}</span> {e.actorId ?? "—"} {formatTime(e.createdAt)}
-                </li>
-              ))}
-              {audit.length === 0 && <li>No events yet.</li>}
-            </ol>
-          </CardContent>
-        </Card>
-      </aside>
+      {room.status !== "resolved" && room.pendingGate !== "resolve" && (
+        <form
+          className="mb-4 flex items-end gap-2 rounded-3xl border border-rule bg-ink-2 p-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void send();
+          }}
+        >
+          <Textarea
+            className="min-h-12 flex-1 border-0 bg-transparent py-2"
+            placeholder="Jump into the conversation…"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                void send();
+              }
+            }}
+          />
+          <Button type="submit" disabled={busy || !draft.trim()}>
+            Send
+          </Button>
+        </form>
+      )}
     </div>
   );
 }
 
-function toneFor(type: string): "gold" | "teal" | "coral" | "mute" {
-  if (type === "artifact") return "teal";
-  if (type === "proposal") return "gold";
-  if (type === "system") return "coral";
-  return "mute";
+function Bubble({ message, twins }: { message: RoomMessage; twins: string[] }) {
+  const isYou = message.authorId === "human" || message.authorName.toLowerCase() === "human";
+  const isSystem = message.type === "system" || message.authorId === "system";
+  const tone = isYou ? "you" : isSystem ? "system" : twins.indexOf(message.authorId) % 2 === 0 ? "gold" : "teal";
+
+  if (isSystem) {
+    return <p className="text-center text-xs text-muted">{message.body}</p>;
+  }
+
+  return (
+    <article className={`flex gap-3 ${isYou ? "flex-row-reverse" : ""}`}>
+      <div
+        className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${
+          tone === "you"
+            ? "bg-paper text-ink"
+            : tone === "gold"
+              ? "bg-gold/20 text-gold"
+              : "bg-teal/20 text-teal"
+        }`}
+      >
+        {isYou ? "You" : message.authorName.slice(0, 1)}
+      </div>
+      <div className={`min-w-0 max-w-[85%] ${isYou ? "text-right" : ""}`}>
+        <p className="mb-1 text-xs text-muted">{isYou ? "You" : message.authorName}</p>
+        <div
+          className={`rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed ${
+            isYou ? "bg-paper text-ink" : "bg-ink-2 text-paper-2"
+          }`}
+        >
+          <p className="whitespace-pre-wrap text-left">{message.body}</p>
+          {message.type === "artifact" && message.payload != null && (
+            <pre className="mt-2 overflow-x-auto rounded-xl bg-ink/60 p-2 text-left font-mono text-[11px] text-teal">
+              {typeof message.payload === "string"
+                ? message.payload
+                : prettyPayload(message.payload)}
+            </pre>
+          )}
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function prettyPayload(payload: unknown): string {
+  if (!payload || typeof payload !== "object") return String(payload);
+  const rec = payload as Record<string, unknown>;
+  const preferred = ["index", "ddl", "rationale", "summary", "kind"];
+  const lines: string[] = [];
+  for (const key of preferred) {
+    if (typeof rec[key] === "string") lines.push(String(rec[key]));
+  }
+  if (lines.length) return lines.join("\n\n");
+  return JSON.stringify(payload, null, 2);
 }

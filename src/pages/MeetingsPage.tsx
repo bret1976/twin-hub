@@ -24,8 +24,8 @@ export function MeetingsPage({ onOpened }: { onOpened: (roomId: string) => void 
 
   return (
     <div className="space-y-4">
-      <h1 className="font-serif text-3xl">Meeting requests</h1>
-      <p className="text-sm text-muted">Consent is required. Accept opens a room; decline leaves an audit event.</p>
+      <h1 className="text-2xl font-medium">Past chats</h1>
+      <p className="text-sm text-muted">Open one to keep watching, or start a new chat from the home screen.</p>
       {error && <p className="text-sm text-coral">{error}</p>}
       {items.length === 0 && (
         <Card>

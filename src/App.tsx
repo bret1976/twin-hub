@@ -43,6 +43,7 @@ export default function App() {
   const [health, setHealth] = useState<Health>({ ok: true });
   const [user, setUser] = useState<SessionUser | null>(null);
   const [org, setOrg] = useState<SessionOrg | null>(null);
+  const [more, setMore] = useState(false);
 
   useEffect(() => {
     const onHash = () => setLoc(parseHash());
@@ -74,64 +75,79 @@ export default function App() {
   }, []);
 
   function go(next: Route, id?: string) {
+    setMore(false);
     if (next === "room" && id) {
       window.location.hash = `#/rooms/${id}`;
       return;
     }
-    window.location.hash = `#/${next}`;
+    window.location.hash = next === "home" ? "#" : `#/${next}`;
   }
+
+  const chatMode = route === "home" || route === "room";
 
   return (
     <div className="min-h-screen bg-ink">
-      <header className="border-b border-rule">
-        <div className="mx-auto flex max-w-6xl flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <p className="font-serif text-xl tracking-tight">TwinMeet</p>
-            <p className="text-xs text-muted">
-              MCP=tools, A2A=peers, TwinMeet=rooms+registry
+      <header className="border-b border-rule/80">
+        <div className="mx-auto flex h-[4.5rem] max-w-2xl items-center justify-between px-4">
+          <button type="button" onClick={() => go("home")} className="text-left">
+            <p className="text-base font-medium tracking-tight">TwinMeet</p>
+            <p className="text-[11px] text-muted">
               {health.twinMode === "gemini" || (health.gemini && health.twinMode !== "scripted")
-                ? ` · Powered by Gemini ${health.model ?? ""}`
-                : " · Scripted mode"}
-              {org ? ` · ${org.name} (${org.plan})` : ""}
+                ? "Two Gemini bots. One chat."
+                : "Two bots. One chat."}
             </p>
-          </div>
-          <nav className="flex flex-wrap gap-1">
-            {(
-              [
-                ["home", "Home"],
-                ["registry", "Registry"],
-                ["discover", "Discover"],
-                ["meetings", "Meetings"],
-                ["memory", "Memory"],
-                ["federation", "A2A/MCP"],
-                ["billing", "Billing"],
-                ["settings", "Settings"],
-                ["account", user ? "Workspace" : "Sign in"],
-              ] as const
-            ).map(([key, label]) => (
-              <button
-                key={key}
-                onClick={() => go(key)}
-                className={`rounded-md px-3 py-1.5 text-sm ${
-                  route === key ? "bg-ink-2 text-gold" : "text-muted hover:text-paper"
-                }`}
-              >
-                {label}
-              </button>
-            ))}
-            {roomId && (
-              <button onClick={() => go("room", roomId)} className="rounded-md px-3 py-1.5 text-sm text-teal">
-                Live room
+          </button>
+          <div className="relative flex items-center gap-3">
+            {route === "room" && (
+              <button type="button" onClick={() => go("home")} className="text-sm text-teal">
+                New chat
               </button>
             )}
-          </nav>
+            <button
+              type="button"
+              onClick={() => go("meetings")}
+              className={`text-sm ${route === "meetings" ? "text-paper" : "text-muted hover:text-paper"}`}
+            >
+              History
+            </button>
+            <button
+              type="button"
+              onClick={() => setMore((v) => !v)}
+              className="text-sm text-muted hover:text-paper"
+              aria-label="More"
+            >
+              More
+            </button>
+            {more && (
+              <div className="absolute right-0 top-9 z-10 w-40 rounded-xl border border-rule bg-ink-2 py-1 text-sm shadow-lg">
+                {(
+                  [
+                    ["settings", "Settings"],
+                    ["registry", "Twins"],
+                    ["discover", "Find a twin"],
+                    ["memory", "Memory"],
+                    ["federation", "A2A / MCP"],
+                    ["billing", "Billing"],
+                    ["account", user ? "Account" : "Sign in"],
+                  ] as const
+                ).map(([key, label]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => go(key)}
+                    className="block w-full px-3 py-1.5 text-left text-paper-2 hover:bg-ink"
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </header>
 
-      <main className="mx-auto max-w-6xl px-4 py-8">
-        {route === "home" && (
-          <HomePage onOpened={(id) => go("room", id)} onDiscover={() => go("discover")} />
-        )}
+      <main className={chatMode ? "" : "mx-auto max-w-2xl px-4 py-8"}>
+        {route === "home" && <HomePage onOpened={(id) => go("room", id)} />}
         {route === "registry" && <RegistryPage />}
         {route === "discover" && <DiscoverPage onOpened={(id) => go("room", id)} />}
         {route === "meetings" && <MeetingsPage onOpened={(id) => go("room", id)} />}
@@ -142,7 +158,7 @@ export default function App() {
         {route === "account" && (
           <AccountPage user={user} org={org} oidc={Boolean(health.oidc)} onSession={onSession} />
         )}
-        {route === "room" && roomId && <RoomPage roomId={roomId} />}
+        {route === "room" && roomId && <RoomPage roomId={roomId} onHome={() => go("home")} />}
       </main>
     </div>
   );
