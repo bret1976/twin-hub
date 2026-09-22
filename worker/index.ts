@@ -84,7 +84,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   const path = url.pathname;
   const registry = env.REGISTRY.getByName("global") as DurableObjectStub<Registry>;
 
-  if (request.method === "GET" && path === "/health") {
+  if (request.method === "GET" && (path === "/health" || path === "/v1/health")) {
     return json({ ok: true, service: "twinmeet" });
   }
 

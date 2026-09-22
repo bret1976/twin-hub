@@ -88,6 +88,7 @@ async function main(): Promise<void> {
 
   const wsEvents: string[] = [];
   const ws = listenRoom(roomId, wsEvents);
+  await sleep(200);
 
   const room = await waitForRoom(roomId, (snap) => {
     const artifact = snap.artifacts[0]?.body;

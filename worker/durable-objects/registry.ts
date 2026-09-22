@@ -495,7 +495,11 @@ export class Registry extends DurableObject<Env> {
     if (filter?.roomId) {
       rows = this.ctx.storage.sql
         .exec<AuditRow>(
-          `SELECT * FROM audit_events WHERE room_id=? ORDER BY created_at ASC`,
+          `SELECT * FROM audit_events
+           WHERE room_id = ?
+              OR meeting_request_id = (SELECT meeting_request_id FROM rooms WHERE id = ?)
+           ORDER BY created_at ASC`,
+          filter.roomId,
           filter.roomId,
         )
         .toArray();
