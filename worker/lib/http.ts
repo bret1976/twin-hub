@@ -36,7 +36,9 @@ export function corsHeaders(): HeadersInit {
   return {
     "access-control-allow-origin": "*",
     "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-    "access-control-allow-headers": "Content-Type, Authorization, X-Actor-Id, X-Actor-Name",
+    "access-control-allow-headers":
+      "Content-Type, Authorization, X-Actor-Id, X-Actor-Name, X-Session-Id, Cookie",
+    "access-control-allow-credentials": "true",
   };
 }
 

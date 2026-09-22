@@ -8,3 +8,17 @@ GEMINI_MODEL=gemini-3.5-flash
 # Optional OpenAI fallback for the joint summary only.
 OPENAI_API_KEY=
 LLM_MODEL=gemini-3.5-flash
+
+# Session signing / cookie salt (any long random string).
+AUTH_SECRET=
+
+# Public origin used for OIDC redirects, Stripe return URLs, and relative HTTP twin callbacks.
+PUBLIC_URL=http://127.0.0.1:45454
+
+# Google OIDC — leave blank to use email/password + demo workspace.
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+
+# Stripe Checkout for TwinMeet Pro ($29/mo). Leave blank to use /v1/billing/demo-activate.
+STRIPE_SECRET_KEY=
+STRIPE_WEBHOOK_SECRET=

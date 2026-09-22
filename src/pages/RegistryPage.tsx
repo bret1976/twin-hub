@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input, Textarea } from "@/components/ui/input";
 import { api, type Agent, type Capability } from "@/lib/api";
 
 export function RegistryPage() {
@@ -10,6 +11,14 @@ export function RegistryPage() {
   const [card, setCard] = useState<{ id: string; json: unknown } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [form, setForm] = useState({
+    name: "",
+    purpose: "",
+    description: "",
+    tags: "general",
+    runtime: "generic" as Agent["runtime"],
+    callbackUrl: "",
+  });
 
   async function load() {
     try {
@@ -62,6 +71,75 @@ export function RegistryPage() {
           {busy ? "Seeding…" : "Seed demo twins"}
         </Button>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Register a twin</CardTitle>
+          <CardDescription>Scripted, generic (Gemini charter), or HTTP callback runtime.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-3 sm:grid-cols-2">
+          <Input placeholder="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+          <Input placeholder="Tags" value={form.tags} onChange={(e) => setForm({ ...form, tags: e.target.value })} />
+          <Input
+            className="sm:col-span-2"
+            placeholder="Purpose / charter"
+            value={form.purpose}
+            onChange={(e) => setForm({ ...form, purpose: e.target.value })}
+          />
+          <Textarea
+            className="sm:col-span-2 min-h-20"
+            placeholder="Description"
+            value={form.description}
+            onChange={(e) => setForm({ ...form, description: e.target.value })}
+          />
+          <select
+            className="h-9 rounded-md border border-rule bg-ink px-3 text-sm"
+            value={form.runtime}
+            onChange={(e) => setForm({ ...form, runtime: e.target.value as Agent["runtime"] })}
+          >
+            <option value="generic">generic (any charter)</option>
+            <option value="scripted">scripted</option>
+            <option value="http">http callback</option>
+          </select>
+          {form.runtime === "http" && (
+            <Input
+              placeholder="Callback URL"
+              value={form.callbackUrl}
+              onChange={(e) => setForm({ ...form, callbackUrl: e.target.value })}
+            />
+          )}
+          <div className="sm:col-span-2">
+            <Button
+              variant="outline"
+              disabled={busy || !form.name || !form.purpose || !form.description}
+              onClick={() =>
+                void (async () => {
+                  setBusy(true);
+                  try {
+                    await api.createAgent({
+                      name: form.name,
+                      purpose: form.purpose,
+                      description: form.description,
+                      tags: form.tags.split(",").map((t) => t.trim()).filter(Boolean),
+                      runtime: form.runtime,
+                      script: form.runtime === "generic" ? "generic" : null,
+                      callbackUrl: form.callbackUrl || null,
+                    });
+                    setForm({ name: "", purpose: "", description: "", tags: "general", runtime: "generic", callbackUrl: "" });
+                    await load();
+                  } catch (err) {
+                    setError(err instanceof Error ? err.message : "Create failed");
+                  } finally {
+                    setBusy(false);
+                  }
+                })()
+              }
+            >
+              Create twin
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
 
       {error && <p className="text-sm text-coral">{error}</p>}
 

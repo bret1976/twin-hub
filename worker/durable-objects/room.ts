@@ -2,11 +2,15 @@ import { DurableObject } from "cloudflare:workers";
 import { newId, nowIso } from "../lib/http";
 import { sanitizePeerText } from "../lib/sanitize";
 import { generateSummary } from "../lib/summary";
+import { callTwinWebhook } from "../lib/callback";
 import { runTwin } from "../twins/dispatch";
+import { runGenericTwin } from "../twins/generic";
+import { embedText } from "../lib/embeddings";
 import type { Registry } from "./registry";
 import type {
   ArtifactRecord,
   Env,
+  GraphEdge,
   JointSummary,
   MessageType,
   OpenRoomInput,
@@ -17,6 +21,7 @@ import type {
   RoomStatus,
   ScriptKind,
   TwinAction,
+  VoteRecord,
 } from "../types";
 
 type SqlValue = string | number | null;
@@ -34,7 +39,27 @@ interface MemberRow {
   role: string;
   runtime: string | null;
   script: string | null;
+  callback_url: string | null;
+  callback_secret: string | null;
+  purpose: string | null;
   joined_at: string;
+}
+
+interface VoteRow {
+  [key: string]: SqlValue;
+  voter_id: string;
+  subject: string;
+  decision: string;
+  voter_name: string;
+  created_at: string;
+}
+
+interface EdgeRow {
+  [key: string]: SqlValue;
+  from_id: string;
+  to_id: string;
+  kind: string;
+  weight: number;
 }
 
 interface MessageRow {
@@ -88,6 +113,9 @@ export class Room extends DurableObject<Env> {
         role TEXT NOT NULL,
         runtime TEXT,
         script TEXT,
+        callback_url TEXT,
+        callback_secret TEXT,
+        purpose TEXT,
         joined_at TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS messages (
@@ -115,7 +143,33 @@ export class Room extends DurableObject<Env> {
         payload_json TEXT NOT NULL,
         created_at TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS votes (
+        voter_id TEXT NOT NULL,
+        subject TEXT NOT NULL,
+        decision TEXT NOT NULL,
+        voter_name TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (voter_id, subject)
+      );
+      CREATE TABLE IF NOT EXISTS edges (
+        from_id TEXT NOT NULL,
+        to_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        weight INTEGER NOT NULL,
+        PRIMARY KEY (from_id, to_id, kind)
+      );
     `);
+    this.ensureColumn("members", "callback_url", "TEXT");
+    this.ensureColumn("members", "callback_secret", "TEXT");
+    this.ensureColumn("members", "purpose", "TEXT");
+  }
+
+  private ensureColumn(table: string, column: string, spec: string): void {
+    const cols = this.ctx.storage.sql
+      .exec<{ name: string } & { [key: string]: string | number | null }>(`PRAGMA table_info(${table})`)
+      .toArray();
+    if (cols.some((c) => c.name === column)) return;
+    this.ctx.storage.sql.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${spec}`);
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -167,6 +221,9 @@ export class Room extends DurableObject<Env> {
     if (this.getMeta("id")) return this.snapshot();
 
     this.setMeta("id", input.roomId);
+    this.setMeta("orgId", input.orgId || "org_demo");
+    this.setMeta("publicBase", input.publicBase || "");
+    this.setMeta("memoriesJson", JSON.stringify(input.memories ?? []));
     this.setMeta("meetingRequestId", input.meetingRequestId);
     this.setMeta("status", "open");
     this.setMeta("intent", input.intent);
@@ -181,12 +238,15 @@ export class Room extends DurableObject<Env> {
 
     for (const member of input.members) {
       this.ctx.storage.sql.exec(
-        `INSERT OR REPLACE INTO members (id, name, role, runtime, script, joined_at) VALUES (?, ?, ?, ?, ?, ?)`,
+        `INSERT OR REPLACE INTO members (id, name, role, runtime, script, callback_url, callback_secret, purpose, joined_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         member.id,
         member.name,
         member.role,
         member.runtime,
         member.script,
+        member.callbackUrl ?? null,
+        member.callbackSecret ?? null,
+        member.purpose ?? null,
         member.joinedAt,
       );
     }
@@ -311,6 +371,72 @@ export class Room extends DurableObject<Env> {
     return this.finalizeResolve(actorId);
   }
 
+  async vote(
+    voterId: string,
+    subject: VoteRecord["subject"],
+    decision: VoteRecord["decision"],
+  ): Promise<RoomSnapshot> {
+    const name = this.memberName(voterId) || voterId;
+    const createdAt = nowIso();
+    this.ctx.storage.sql.exec(
+      `INSERT OR REPLACE INTO votes (voter_id, subject, decision, voter_name, created_at) VALUES (?, ?, ?, ?, ?)`,
+      voterId,
+      subject,
+      decision,
+      name,
+      createdAt,
+    );
+    this.appendMessage(
+      {
+        authorId: voterId,
+        authorName: name,
+        type: "system",
+        body: `${name} voted ${decision} on ${subject}.`,
+      },
+      { countRound: false, skipFloor: true },
+    );
+    await this.audit("vote.cast", voterId, { subject, decision });
+    this.broadcast({ type: "vote.cast", vote: { voterId, voterName: name, subject, decision, createdAt } });
+
+    if (subject === "resolve" && decision === "approve") {
+      const twins = this.listMembers().filter((m) => m.role === "twin");
+      const votes = this.listVotes().filter((v) => v.subject === "resolve");
+      const unanimous =
+        twins.length >= 2 &&
+        twins.every((t) => votes.some((v) => v.voterId === t.id && v.decision === "approve"));
+      if (unanimous && this.getMeta("status") === "open") {
+        await this.requestResolve(voterId, "Unanimous twin vote to resolve.");
+      }
+    }
+    return this.snapshot();
+  }
+
+  async joinMember(member: RoomMember): Promise<RoomSnapshot> {
+    this.ctx.storage.sql.exec(
+      `INSERT OR REPLACE INTO members (id, name, role, runtime, script, callback_url, callback_secret, purpose, joined_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      member.id,
+      member.name,
+      member.role,
+      member.runtime,
+      member.script,
+      member.callbackUrl ?? null,
+      member.callbackSecret ?? null,
+      member.purpose ?? null,
+      member.joinedAt,
+    );
+    this.appendMessage(
+      {
+        authorId: "system",
+        authorName: "TwinMeet",
+        type: "system",
+        body: `${member.name} joined the room.`,
+      },
+      { countRound: false, skipFloor: true },
+    );
+    this.broadcast({ type: "member.joined", member });
+    return this.snapshot();
+  }
+
   async escalate(actorId: string, reason: string): Promise<RoomSnapshot> {
     this.setMeta("status", "escalated");
     this.setMeta("pendingGate", "resolve");
@@ -375,7 +501,28 @@ export class Room extends DurableObject<Env> {
     this.broadcast({ type: "room.resolved", summary });
     await this.ctx.storage.deleteAlarm();
     await this.forwardRoomStatus("resolved");
+    await this.persistMemory(summary);
     return this.snapshot();
+  }
+
+  private async persistMemory(summary: JointSummary): Promise<void> {
+    const orgId = this.getMeta("orgId") || "org_demo";
+    const roomId = this.getMeta("id");
+    if (!orgId || !roomId) return;
+    let embedding: number[] | null = null;
+    if (this.env.GEMINI_API_KEY) {
+      embedding = await embedText(this.env.GEMINI_API_KEY, `${summary.problem}\n${summary.narrative}`);
+    }
+    const registry = this.env.REGISTRY.getByName("global") as DurableObjectStub<Registry>;
+    await registry.addMemory({
+      orgId,
+      roomId,
+      problem: summary.problem,
+      artifact: summary.artifact,
+      tags: [],
+      embedding,
+      narrative: summary.narrative,
+    });
   }
 
   private async maybeAdvance(): Promise<void> {
@@ -417,10 +564,15 @@ export class Room extends DurableObject<Env> {
 
     const floorId = this.getMeta("floorHolderId");
     const member = floorId ? this.getMember(floorId) : null;
-    if (!member || member.role !== "twin" || member.runtime !== "scripted" || !member.script) {
-      return;
-    }
+    if (!member || member.role !== "twin") return;
 
+    const memories = (() => {
+      try {
+        return JSON.parse(this.getMeta("memoriesJson") || "[]") as string[];
+      } catch {
+        return [];
+      }
+    })();
     const ctx = {
       selfId: member.id,
       selfName: member.name,
@@ -428,8 +580,22 @@ export class Room extends DurableObject<Env> {
       body: this.getMeta("body"),
       members: this.listMembers(),
       transcript: this.listMessages(),
+      purpose: member.purpose || undefined,
+      memories,
     };
-    const actions = await runTwin(member.script as ScriptKind, ctx, geminiOptions(this.env));
+    let actions: TwinAction[] = [];
+    if (member.runtime === "http" && member.callbackUrl) {
+      actions = await callTwinWebhook(
+        member.callbackUrl,
+        member.callbackSecret,
+        { ...ctx, roomId: this.getMeta("id"), event: "floor.granted" },
+        this.getMeta("publicBase"),
+      );
+    } else if (member.script && member.script !== "generic") {
+      actions = await runTwin(member.script as ScriptKind, ctx, geminiOptions(this.env));
+    } else {
+      actions = await runGenericTwin(ctx, geminiOptions(this.env));
+    }
     if (actions.length === 0) {
       this.setMeta("lastTurnAt", String(Date.now()));
       this.passFloor(member.id);
@@ -468,6 +634,10 @@ export class Room extends DurableObject<Env> {
         this.listMessages().at(-1)!,
         action.payload,
       );
+      return;
+    }
+    if (action.type === "vote") {
+      await this.vote(member.id, action.subject, action.decision);
       return;
     }
     if (action.type === "handoff") {
@@ -577,6 +747,7 @@ export class Room extends DurableObject<Env> {
       const next = Number(this.getMeta("roundCount") || "0") + 1;
       this.setMeta("roundCount", String(next));
     }
+    this.recordGraph(message);
     void this.audit("message.created", input.authorId, {
       messageId: message.id,
       type: message.type,
@@ -584,6 +755,46 @@ export class Room extends DurableObject<Env> {
     });
     this.broadcast({ type: "message.created", message });
     return message;
+  }
+
+  private recordGraph(message: RoomMessage): void {
+    if (!message.authorId || message.authorId === "system" || message.type === "system") return;
+    const previous = this.listMessages()
+      .filter((m) => m.id !== message.id && m.authorId !== "system" && m.type !== "system")
+      .at(-1);
+    if (previous && previous.authorId !== message.authorId) {
+      this.bumpEdge(previous.authorId, message.authorId, "follow");
+    }
+    if (message.type === "handoff") {
+      const toId = isRecord(message.payload) ? String(message.payload.toId ?? "") : mentionTarget(message.body);
+      if (toId && toId !== message.authorId) this.bumpEdge(message.authorId, toId, "handoff");
+    }
+    const mentioned = mentionTarget(message.body);
+    if (mentioned && mentioned !== message.authorId && this.getMember(mentioned)) {
+      this.bumpEdge(message.authorId, mentioned, "mention");
+    }
+  }
+
+  private bumpEdge(fromId: string, toId: string, kind: GraphEdge["kind"]): void {
+    const existing = this.ctx.storage.sql
+      .exec<EdgeRow>(`SELECT * FROM edges WHERE from_id=? AND to_id=? AND kind=?`, fromId, toId, kind)
+      .toArray()[0];
+    if (existing) {
+      this.ctx.storage.sql.exec(
+        `UPDATE edges SET weight=? WHERE from_id=? AND to_id=? AND kind=?`,
+        existing.weight + 1,
+        fromId,
+        toId,
+        kind,
+      );
+      return;
+    }
+    this.ctx.storage.sql.exec(
+      `INSERT INTO edges (from_id, to_id, kind, weight) VALUES (?, ?, ?, 1)`,
+      fromId,
+      toId,
+      kind,
+    );
   }
 
   private snapshot(): RoomSnapshot {
@@ -599,6 +810,7 @@ export class Room extends DurableObject<Env> {
     const pending = this.getMeta("pendingGate");
     return {
       id: this.getMeta("id"),
+      orgId: this.getMeta("orgId") || "org_demo",
       meetingRequestId: this.getMeta("meetingRequestId"),
       status: (this.getMeta("status") || "open") as RoomStatus,
       intent: this.getMeta("intent"),
@@ -606,11 +818,13 @@ export class Room extends DurableObject<Env> {
       maxRounds: Number(this.getMeta("maxRounds") || "8"),
       roundCount: Number(this.getMeta("roundCount") || "0"),
       floorHolderId: this.getMeta("floorHolderId") || null,
-      pendingGate: pending === "resolve" || pending === "tool" ? pending : null,
+      pendingGate: pending === "resolve" || pending === "tool" || pending === "vote" ? pending : null,
       members: this.listMembers(),
       messages: this.listMessages(),
       artifacts: this.listArtifacts(),
       summary,
+      votes: this.listVotes(),
+      graph: this.listEdges(),
       createdAt: this.getMeta("createdAt"),
     };
   }
@@ -625,7 +839,35 @@ export class Room extends DurableObject<Env> {
         role: r.role as RoomMember["role"],
         runtime: r.runtime as RoomMember["runtime"],
         script: r.script as RoomMember["script"],
+        callbackUrl: r.callback_url,
+        callbackSecret: r.callback_secret,
+        purpose: r.purpose,
         joinedAt: r.joined_at,
+      }));
+  }
+
+  private listVotes(): VoteRecord[] {
+    return this.ctx.storage.sql
+      .exec<VoteRow>(`SELECT * FROM votes ORDER BY created_at ASC`)
+      .toArray()
+      .map((r) => ({
+        voterId: r.voter_id,
+        voterName: r.voter_name,
+        subject: r.subject as VoteRecord["subject"],
+        decision: r.decision as VoteRecord["decision"],
+        createdAt: r.created_at,
+      }));
+  }
+
+  private listEdges(): GraphEdge[] {
+    return this.ctx.storage.sql
+      .exec<EdgeRow>(`SELECT * FROM edges`)
+      .toArray()
+      .map((r) => ({
+        fromId: r.from_id,
+        toId: r.to_id,
+        kind: r.kind as GraphEdge["kind"],
+        weight: r.weight,
       }));
   }
 

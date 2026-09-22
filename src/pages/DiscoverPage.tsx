@@ -10,6 +10,7 @@ export function DiscoverPage({ onOpened }: { onOpened: (roomId: string) => void 
   const [tags, setTags] = useState("sql,postgres");
   const [body, setBody] = useState(SAMPLE_DDL);
   const [requesterId, setRequesterId] = useState("planner-twin");
+  const [extraInvitees, setExtraInvitees] = useState("");
   const [hits, setHits] = useState<DiscoverHit[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -31,9 +32,14 @@ export function DiscoverPage({ onOpened }: { onOpened: (roomId: string) => void 
   async function requestMeeting(inviteeId: string) {
     setBusy(true);
     try {
+      const extra = extraInvitees
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean);
       const proposed = await api.propose({
         requesterId,
         inviteeId,
+        inviteeIds: extra.length ? [inviteeId, ...extra] : undefined,
         intent,
         body,
         tags: tags.split(",").map((t) => t.trim()).filter(Boolean),
@@ -53,8 +59,8 @@ export function DiscoverPage({ onOpened }: { onOpened: (roomId: string) => void 
         <div>
           <h1 className="font-serif text-3xl">Discover & invite</h1>
           <p className="mt-1 text-sm text-muted">
-            Intent before invite. Tag overlap plus BM25-style keyword scoring ranks peers. Top
-            result for the demo should be HasSkill.
+            Intent before invite. Hybrid ranking: tag overlap + BM25, plus Gemini embeddings when a
+            key is set. Add extra twin ids for an N-party room. Top demo result should be HasSkill.
           </p>
         </div>
         <Card>
@@ -72,6 +78,14 @@ export function DiscoverPage({ onOpened }: { onOpened: (roomId: string) => void 
                 <label className="mb-1 block text-xs uppercase tracking-wide text-muted">Requester</label>
                 <Input value={requesterId} onChange={(e) => setRequesterId(e.target.value)} />
               </div>
+            </div>
+            <div>
+              <label className="mb-1 block text-xs uppercase tracking-wide text-muted">Extra invitees (optional)</label>
+              <Input
+                placeholder="compliance-twin, callback-twin"
+                value={extraInvitees}
+                onChange={(e) => setExtraInvitees(e.target.value)}
+              />
             </div>
             <Button onClick={() => void search()} disabled={busy}>
               {busy ? "Searching…" : "Discover peers"}

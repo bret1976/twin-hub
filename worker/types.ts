@@ -4,9 +4,9 @@ export type RoomStatus = "open" | "paused" | "resolved" | "escalated" | "decline
 
 export type MeetingStatus = "proposed" | "accepted" | "declined";
 
-export type AgentRuntime = "scripted" | "http";
+export type AgentRuntime = "scripted" | "http" | "generic";
 
-export type ScriptKind = "planner" | "sql-reviewer";
+export type ScriptKind = "planner" | "sql-reviewer" | "generic";
 
 export type TwinRole = "twin" | "human";
 
@@ -17,10 +17,17 @@ export interface Env {
   GEMINI_API_KEY?: string;
   GEMINI_MODEL?: string;
   LLM_MODEL?: string;
+  AUTH_SECRET?: string;
+  GOOGLE_CLIENT_ID?: string;
+  GOOGLE_CLIENT_SECRET?: string;
+  STRIPE_SECRET_KEY?: string;
+  STRIPE_WEBHOOK_SECRET?: string;
+  PUBLIC_URL?: string;
 }
 
 export interface AgentRecord {
   id: string;
+  orgId: string;
   name: string;
   description: string;
   purpose: string;
@@ -31,6 +38,9 @@ export interface AgentRecord {
   runtime: AgentRuntime;
   script: ScriptKind | null;
   callbackUrl: string | null;
+  callbackSecret: string | null;
+  embedding: number[] | null;
+  federatedCardUrl: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -48,8 +58,10 @@ export interface CapabilityRecord {
 
 export interface MeetingRequestRecord {
   id: string;
+  orgId: string;
   requesterId: string;
   inviteeId: string;
+  inviteeIds: string[];
   intent: string;
   body: string;
   tags: string[];
@@ -82,6 +94,9 @@ export interface RoomMember {
   role: TwinRole;
   runtime: AgentRuntime | null;
   script: ScriptKind | null;
+  callbackUrl: string | null;
+  callbackSecret: string | null;
+  purpose: string | null;
   joinedAt: string;
 }
 
@@ -117,6 +132,7 @@ export interface JointSummary {
 
 export interface RoomSnapshot {
   id: string;
+  orgId: string;
   meetingRequestId: string;
   status: RoomStatus;
   intent: string;
@@ -124,12 +140,75 @@ export interface RoomSnapshot {
   maxRounds: number;
   roundCount: number;
   floorHolderId: string | null;
-  pendingGate: "resolve" | "tool" | null;
+  pendingGate: "resolve" | "tool" | "vote" | null;
   members: RoomMember[];
   messages: RoomMessage[];
   artifacts: ArtifactRecord[];
   summary: JointSummary | null;
+  votes: VoteRecord[];
+  graph: GraphEdge[];
   createdAt: string;
+}
+
+export interface VoteRecord {
+  voterId: string;
+  voterName: string;
+  subject: "artifact" | "resolve";
+  decision: "approve" | "reject";
+  createdAt: string;
+}
+
+export interface GraphEdge {
+  fromId: string;
+  toId: string;
+  kind: "handoff" | "mention" | "follow";
+  weight: number;
+}
+
+export interface OrgRecord {
+  id: string;
+  name: string;
+  plan: "free" | "pro";
+  stripeCustomerId: string | null;
+  stripeSubscriptionId: string | null;
+  createdAt: string;
+}
+
+export interface UserRecord {
+  id: string;
+  orgId: string;
+  email: string;
+  name: string;
+  role: "owner" | "member";
+  createdAt: string;
+}
+
+export interface SessionRecord {
+  id: string;
+  userId: string;
+  orgId: string;
+  expiresAt: string;
+}
+
+export interface MemoryRecord {
+  id: string;
+  orgId: string;
+  roomId: string | null;
+  problem: string;
+  artifact: Record<string, unknown> | null;
+  tags: string[];
+  embedding: number[] | null;
+  narrative: string;
+  createdAt: string;
+}
+
+export interface FederatedPeer {
+  id: string;
+  orgId: string;
+  cardUrl: string;
+  name: string;
+  card: A2AAgentCard;
+  lastFetched: string;
 }
 
 export interface DiscoverHit {
@@ -148,6 +227,8 @@ export interface TwinContext {
   body: string;
   members: RoomMember[];
   transcript: RoomMessage[];
+  purpose?: string;
+  memories?: string[];
 }
 
 export type TwinAction =
@@ -155,16 +236,20 @@ export type TwinAction =
   | { type: "proposal"; body: string }
   | { type: "artifact"; body: string; payload: Record<string, unknown> }
   | { type: "handoff"; body: string; toId: string }
-  | { type: "request_resolve"; body: string };
+  | { type: "request_resolve"; body: string }
+  | { type: "vote"; body: string; subject: "artifact" | "resolve"; decision: "approve" | "reject" };
 
 export interface OpenRoomInput {
   roomId: string;
+  orgId: string;
   meetingRequestId: string;
   intent: string;
   body: string;
   maxRounds: number;
   members: RoomMember[];
   floorHolderId: string;
+  publicBase?: string;
+  memories?: string[];
 }
 
 export interface PostMessageInput {
@@ -217,3 +302,6 @@ export const DEMO_INTENT = "Review this toy DDL for a orders table and suggest o
 
 export const PLANNER_ID = "planner-twin";
 export const REVIEWER_ID = "sql-reviewer-twin";
+export const COMPLIANCE_ID = "compliance-twin";
+export const CALLBACK_ID = "callback-twin";
+export const DEMO_ORG_ID = "org_demo";

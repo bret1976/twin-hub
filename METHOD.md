@@ -71,7 +71,7 @@ Every room appends `AuditEvent` rows: request, accept/decline, messages, artifac
 
 ## 12. Federation later
 
-Keep the Room interface boring: open, post message, request resolve, approve, escalate, snapshot, audit. A later Node + Postgres + Socket.IO port should be able to implement the same verbs. Full A2A federation, embeddings, org memory, and OIDC are explicitly deferred. Speak A2A-shaped cards and MCP-shaped tool boundaries now; federate when the room contract is stable.
+Keep the Room interface boring: open, post message, request resolve, approve, escalate, vote, join, snapshot, audit. The same verbs should port. TwinMeet now ships the meeting layer plus: A2A JSON-RPC at `/v1/a2a`, MCP tools at `/v1/mcp`, HMAC HTTP callback twins, org memory, hybrid embeddings, voting, an N-party speaker graph, org tenancy, email/OIDC login, and Stripe (or local) Pro billing.
 
 ---
 

@@ -77,6 +77,18 @@ export function RoomPage({ roomId }: { roomId: string }) {
     }
   }
 
+  async function onVote(subject: "artifact" | "resolve", decision: "approve" | "reject") {
+    setBusy(true);
+    try {
+      const res = await api.vote(roomId, subject, decision);
+      setRoom(res.room);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Vote failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function send() {
     if (!draft.trim()) return;
     setBusy(true);
@@ -180,6 +192,61 @@ export function RoomPage({ roomId }: { roomId: string }) {
       </div>
 
       <aside className="space-y-4">
+        <Card>
+          <CardHeader>
+            <CardTitle>Members</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-1 text-sm">
+            {room.members.map((m) => (
+              <p key={m.id}>
+                <span className="text-paper">{m.name}</span>{" "}
+                <span className="text-xs text-muted">
+                  {m.role}
+                  {m.runtime ? ` · ${m.runtime}` : ""}
+                </span>
+              </p>
+            ))}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Votes</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2 text-sm">
+            {(room.votes ?? []).length === 0 && <p className="text-muted">No votes yet.</p>}
+            {(room.votes ?? []).map((v) => (
+              <p key={`${v.voterId}-${v.subject}`}>
+                <span className="text-paper">{v.voterName}</span> {v.decision} {v.subject}
+              </p>
+            ))}
+            {room.status !== "resolved" && (
+              <div className="flex flex-wrap gap-2 pt-1">
+                <Button size="sm" variant="outline" disabled={busy} onClick={() => void onVote("artifact", "approve")}>
+                  Vote artifact
+                </Button>
+                <Button size="sm" variant="outline" disabled={busy} onClick={() => void onVote("resolve", "approve")}>
+                  Vote resolve
+                </Button>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Speaker graph</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-1 font-mono text-xs text-muted">
+            {(room.graph ?? []).length === 0 && <p>Edges appear as twins hand off and mention each other.</p>}
+            {(room.graph ?? []).map((e) => (
+              <p key={`${e.fromId}-${e.toId}-${e.kind}`}>
+                {e.fromId} → {e.toId} {e.kind} ×{e.weight}
+              </p>
+            ))}
+          </CardContent>
+        </Card>
+
         <Card>
           <CardHeader>
             <CardTitle>Artifact</CardTitle>
