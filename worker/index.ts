@@ -1,4 +1,4 @@
-import { toAgentCard } from "./lib/card";
+import { toAgentCard, toPublicAgent } from "./lib/card";
 import { error, json, parseTags, readJson, withCors, nowIso } from "./lib/http";
 import { clearSessionCookie, readSessionId, sessionCookie } from "./lib/auth";
 import { embedText } from "./lib/embeddings";
@@ -92,21 +92,24 @@ interface AuthBody {
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
+    const origin = request.headers.get("origin");
     if (request.method === "OPTIONS") {
-      return withCors(new Response(null, { status: 204 }));
+      return withCors(new Response(null, { status: 204 }), origin);
     }
     try {
-      return withCors(await route(request, env));
+      return withCors(await route(request, env), origin);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Internal error";
       const status = /not found/i.test(message)
         ? 404
         : /credentials/i.test(message)
           ? 401
-          : /already|floor|paused|resolved|registered/i.test(message)
-            ? 409
-            : 500;
-      return withCors(error(status, message));
+          : /plan limit|upgrade/i.test(message)
+            ? 402
+            : /already|floor|paused|resolved|registered/i.test(message)
+              ? 409
+              : 500;
+      return withCors(error(status, message), origin);
     }
   },
 } satisfies ExportedHandler<Env>;
@@ -137,12 +140,14 @@ async function route(request: Request, env: Env): Promise<Response> {
     return json(platformCard(origin));
   }
 
+  const orgId = session?.org.id || DEMO_ORG_ID;
+
   if (path === "/v1/a2a") {
-    return handleA2A(request, env, registry, origin);
+    return handleA2A(request, env, registry, origin, orgId);
   }
 
   if (path === "/v1/mcp") {
-    return handleMcp(request, env, registry);
+    return handleMcp(request, env, registry, orgId);
   }
 
   if (request.method === "POST" && path === "/v1/hooks/echo-twin") {
@@ -160,7 +165,17 @@ async function route(request: Request, env: Env): Promise<Response> {
     const q = url.searchParams.get("q") ?? "";
     let queryEmbedding: number[] | null = null;
     if (q && env.GEMINI_API_KEY) queryEmbedding = await embedText(env.GEMINI_API_KEY, q);
-    return json({ memories: await registry.listMemory(orgId, queryEmbedding) });
+    let memories = (await registry.listMemory(orgId, queryEmbedding)) as Array<{
+      problem: string;
+      narrative: string;
+    }>;
+    if (q && !queryEmbedding) {
+      const needle = q.toLowerCase();
+      memories = memories.filter(
+        (m) => m.problem.toLowerCase().includes(needle) || m.narrative.toLowerCase().includes(needle),
+      );
+    }
+    return json({ memories });
   }
 
   if (request.method === "POST" && path === "/v1/memory") {
@@ -203,7 +218,20 @@ async function route(request: Request, env: Env): Promise<Response> {
     const card = (await fetched.json()) as import("./types").A2AAgentCard;
     if (!card?.name) return error(400, "Peer card is missing name");
     const peer = await registry.upsertPeer(orgId, body.cardUrl, card);
-    return json({ peer }, 201);
+    const existing = (await registry.listAgents(orgId)).find((a) => a.federatedCardUrl === body.cardUrl);
+    const agent =
+      existing ??
+      (await registry.createAgent({
+        orgId,
+        name: card.name,
+        description: card.description,
+        purpose: card.description,
+        tags: card.skills?.flatMap((s) => s.tags) ?? [],
+        runtime: "http",
+        callbackUrl: card.supportedInterfaces?.[0]?.url ?? body.cardUrl,
+        federatedCardUrl: body.cardUrl,
+      }));
+    return json({ peer, agent: toPublicAgent(agent) }, 201);
   }
 
   if (request.method === "GET" && path === "/v1/a2a/tasks") {
@@ -218,7 +246,8 @@ async function route(request: Request, env: Env): Promise<Response> {
   }
 
   if (request.method === "GET" && path === "/v1/agents") {
-    return json({ agents: await registry.listAgents() });
+    const agents = (await registry.listAgents(orgId)).map(toPublicAgent);
+    return json({ agents });
   }
 
   if (request.method === "POST" && path === "/v1/agents") {
@@ -226,12 +255,14 @@ async function route(request: Request, env: Env): Promise<Response> {
     if (!body.name || !body.description || !body.purpose) {
       return error(400, "name, description, and purpose are required");
     }
+    const ownerOrg = session?.org.id || body.orgId || DEMO_ORG_ID;
+    await assertCanCreateAgent(registry, ownerOrg);
     const agent = await registry.createAgent({
       ...body,
-      orgId: body.orgId || session?.org.id || DEMO_ORG_ID,
+      orgId: ownerOrg,
     });
     await embedAgents(env, registry, [agent]);
-    return json({ agent }, 201);
+    return json({ agent: toPublicAgent(agent) }, 201);
   }
 
   const agentCard = match(path, /^\/v1\/agents\/([^/]+)\/card$/);
@@ -259,12 +290,12 @@ async function route(request: Request, env: Env): Promise<Response> {
     const agent = await registry.getAgent(agentOne[1]);
     if (!agent) return error(404, "Agent not found");
     const capabilities = await registry.listCapabilities(agent.id);
-    return json({ agent, capabilities });
+    return json({ agent: toPublicAgent(agent), capabilities });
   }
   if (agentOne && (request.method === "PATCH" || request.method === "PUT")) {
     const body = await readJson<Partial<AgentBody>>(request);
     const agent = await registry.updateAgent(agentOne[1], body);
-    return json({ agent });
+    return json({ agent: toPublicAgent(agent) });
   }
   if (agentOne && request.method === "DELETE") {
     await registry.deleteAgent(agentOne[1]);
@@ -287,12 +318,14 @@ async function route(request: Request, env: Env): Promise<Response> {
     if (intent && env.GEMINI_API_KEY) {
       queryEmbedding = await embedText(env.GEMINI_API_KEY, intent);
     }
-    const results = await registry.discover(intent, tags, queryEmbedding);
-    return json({ results });
+    const results = await registry.discover(intent, tags, queryEmbedding, orgId);
+    return json({
+      results: results.map((hit) => ({ ...hit, agent: toPublicAgent(hit.agent) })),
+    });
   }
 
   if (request.method === "GET" && path === "/v1/meeting-requests") {
-    return json({ meetingRequests: await registry.listMeetings() });
+    return json({ meetingRequests: await registry.listMeetings(orgId) });
   }
 
   if (request.method === "POST" && path === "/v1/meeting-requests") {
@@ -309,6 +342,8 @@ async function route(request: Request, env: Env): Promise<Response> {
 
   const accept = match(path, /^\/v1\/meeting-requests\/([^/]+)\/accept$/);
   if (accept && request.method === "POST") {
+    const pending = await registry.getMeeting(accept[1]);
+    await assertCanOpenRoom(registry, pending?.orgId || orgId);
     const meeting = await registry.decideMeeting(accept[1], "accepted");
     if (!meeting.roomId) return error(500, "Accept did not create a room");
     const snapshot = await openRoom(env, registry, meeting, origin);
@@ -329,7 +364,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   }
 
   if (request.method === "GET" && path === "/v1/rooms") {
-    return json({ rooms: await registry.listRooms() });
+    return json({ rooms: await registry.listRooms(orgId) });
   }
 
   const roomWs = match(path, /^\/v1\/rooms\/([^/]+)\/ws$/);
@@ -498,7 +533,9 @@ async function routeAuth(
     dest.searchParams.set("redirect_uri", redirect);
     dest.searchParams.set("response_type", "code");
     dest.searchParams.set("scope", "openid email profile");
-    dest.searchParams.set("state", crypto.randomUUID());
+    const state = crypto.randomUUID();
+    await registry.saveOauthState(state);
+    dest.searchParams.set("state", state);
     dest.searchParams.set("access_type", "online");
     return Response.redirect(dest.toString(), 302);
   }
@@ -508,7 +545,9 @@ async function routeAuth(
       return error(501, "Google OIDC is not configured");
     }
     const code = url.searchParams.get("code");
+    const state = url.searchParams.get("state") || "";
     if (!code) return error(400, "Missing OIDC code");
+    if (!(await registry.consumeOauthState(state))) return error(400, "Invalid or expired OIDC state");
     const redirect = `${env.PUBLIC_URL || url.origin}/v1/auth/google/callback`;
     const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
       method: "POST",
@@ -566,10 +605,10 @@ async function routeBilling(
     const org = await registry.getOrg(orgId);
     if (!org) return error(404, "Org not found. Enter the demo workspace or register first.");
     if (!env.STRIPE_SECRET_KEY) {
-      return json({
-        demo: true,
-        message: "Stripe is not configured. Use POST /v1/billing/demo-activate to enable TwinMeet Pro locally.",
-      });
+      return error(
+        501,
+        "Stripe is not configured. Set STRIPE_SECRET_KEY for Checkout, or POST /v1/billing/demo-activate only on a development host.",
+      );
     }
     const created = await createCheckoutSession({
       secretKey: env.STRIPE_SECRET_KEY,
@@ -582,17 +621,21 @@ async function routeBilling(
   }
 
   if (request.method === "POST" && path === "/v1/billing/demo-activate") {
+    if (env.STRIPE_SECRET_KEY) {
+      return error(403, "Demo activate is disabled when Stripe is configured. Use Checkout.");
+    }
     const orgId = session?.org.id || DEMO_ORG_ID;
     const org = await registry.setOrgPlan(orgId, "pro");
-    return json({ org, plan: "pro", demo: true });
+    return json({ org, plan: "pro", developmentGrant: true });
   }
 
   if (request.method === "POST" && path === "/v1/billing/webhook") {
     const payload = await request.text();
-    if (env.STRIPE_WEBHOOK_SECRET) {
-      const ok = await verifyStripeSignature(payload, request.headers.get("stripe-signature"), env.STRIPE_WEBHOOK_SECRET);
-      if (!ok) return error(400, "Invalid Stripe signature");
+    if (!env.STRIPE_WEBHOOK_SECRET) {
+      return error(501, "STRIPE_WEBHOOK_SECRET is required to accept billing events");
     }
+    const ok = await verifyStripeSignature(payload, request.headers.get("stripe-signature"), env.STRIPE_WEBHOOK_SECRET);
+    if (!ok) return error(400, "Invalid Stripe signature");
     const event = JSON.parse(payload || "{}") as {
       type?: string;
       data?: { object?: { client_reference_id?: string; customer?: string; subscription?: string; metadata?: { orgId?: string } } };
@@ -697,4 +740,18 @@ function match(path: string, re: RegExp): RegExpMatchArray | null {
 
 function roomStub(env: Env, roomId: string): RoomRpc {
   return env.ROOM.getByName(roomId) as unknown as RoomRpc;
+}
+
+async function assertCanCreateAgent(registry: DurableObjectStub<Registry>, orgId: string): Promise<void> {
+  const org = await registry.getOrg(orgId);
+  if (!org || org.plan === "pro") return;
+  const n = await registry.countOrgAgents(orgId);
+  if (n >= 8) throw new Error("Free plan limit reached. Upgrade to TwinMeet Pro.");
+}
+
+async function assertCanOpenRoom(registry: DurableObjectStub<Registry>, orgId: string): Promise<void> {
+  const org = await registry.getOrg(orgId);
+  if (!org || org.plan === "pro") return;
+  const n = await registry.countOpenRooms(orgId);
+  if (n >= 3) throw new Error("Free plan limit reached. Upgrade to TwinMeet Pro.");
 }

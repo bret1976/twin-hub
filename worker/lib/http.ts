@@ -32,19 +32,22 @@ export function parseTags(raw: string | null | undefined): string[] {
     .filter(Boolean);
 }
 
-export function corsHeaders(): HeadersInit {
-  return {
-    "access-control-allow-origin": "*",
+export function corsHeaders(requestOrigin?: string | null): HeadersInit {
+  const origin = requestOrigin && requestOrigin !== "null" ? requestOrigin : "*";
+  const headers: Record<string, string> = {
+    "access-control-allow-origin": origin,
     "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
     "access-control-allow-headers":
       "Content-Type, Authorization, X-Actor-Id, X-Actor-Name, X-Session-Id, Cookie",
-    "access-control-allow-credentials": "true",
+    vary: "Origin",
   };
+  if (origin !== "*") headers["access-control-allow-credentials"] = "true";
+  return headers;
 }
 
-export function withCors(response: Response): Response {
+export function withCors(response: Response, requestOrigin?: string | null): Response {
   const headers = new Headers(response.headers);
-  for (const [k, v] of Object.entries(corsHeaders())) {
+  for (const [k, v] of Object.entries(corsHeaders(requestOrigin))) {
     headers.set(k, v);
   }
   return new Response(response.body, { status: response.status, headers });

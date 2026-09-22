@@ -31,11 +31,23 @@ export function BillingPage({ org, onOrg }: { org: SessionOrg | null; onOrg: (or
         window.location.href = res.url;
         return;
       }
+      setError(res.message || "Stripe Checkout is not configured on this host.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Checkout failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function grantDev() {
+    setBusy(true);
+    setError(null);
+    try {
       const activated = await api.activatePro();
       setPlan("pro");
       onOrg(activated.org);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Checkout failed");
+      setError(err instanceof Error ? err.message : "Grant failed");
     } finally {
       setBusy(false);
     }
@@ -46,8 +58,7 @@ export function BillingPage({ org, onOrg }: { org: SessionOrg | null; onOrg: (or
       <div>
         <h1 className="font-serif text-3xl">Billing</h1>
         <p className="mt-1 text-sm text-muted">
-          TwinMeet Pro is $29/month. Stripe Checkout is used when STRIPE_SECRET_KEY is set; otherwise
-          this workspace can activate Pro locally so rooms, memory, and federation stay unblocked.
+          TwinMeet Pro is $29/month via Stripe Checkout. This host {stripe ? "has a Stripe key." : "does not have STRIPE_SECRET_KEY, so Checkout cannot charge a card."}
         </p>
       </div>
       {error && <p className="text-sm text-coral">{error}</p>}
@@ -55,7 +66,7 @@ export function BillingPage({ org, onOrg }: { org: SessionOrg | null; onOrg: (or
         <Card>
           <CardHeader>
             <CardTitle>Free</CardTitle>
-            <CardDescription>Seeded twins, two-party rooms, audit.</CardDescription>
+            <CardDescription>Platform twins, up to 8 org-owned twins, 3 open rooms.</CardDescription>
           </CardHeader>
           <CardContent>
             <Badge variant={plan === "free" ? "gold" : "mute"}>{plan === "free" ? "Current" : "Included"}</Badge>
@@ -64,13 +75,18 @@ export function BillingPage({ org, onOrg }: { org: SessionOrg | null; onOrg: (or
         <Card>
           <CardHeader>
             <CardTitle>TwinMeet Pro</CardTitle>
-            <CardDescription>$29 / month — extra twins, org memory, federation, voting rooms.</CardDescription>
+            <CardDescription>$29 / month — unlimited twins, rooms, memory, and federation.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
-            <Badge variant={plan === "pro" ? "teal" : "mute"}>{plan === "pro" ? "Current" : stripe ? "Stripe" : "Local activate"}</Badge>
-            {plan !== "pro" && (
+            <Badge variant={plan === "pro" ? "teal" : "mute"}>{plan === "pro" ? "Current" : stripe ? "Stripe" : "No Stripe key"}</Badge>
+            {plan !== "pro" && stripe && (
               <Button disabled={busy} onClick={() => void checkout()}>
-                {stripe ? "Checkout with Stripe" : "Activate Pro"}
+                Checkout with Stripe
+              </Button>
+            )}
+            {plan !== "pro" && !stripe && (
+              <Button variant="outline" disabled={busy} onClick={() => void grantDev()}>
+                Development Pro grant
               </Button>
             )}
           </CardContent>

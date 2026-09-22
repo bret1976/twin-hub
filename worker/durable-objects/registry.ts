@@ -196,6 +196,10 @@ export class Registry extends DurableObject<Env> {
         card_json TEXT NOT NULL,
         last_fetched TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS oauth_states (
+        id TEXT PRIMARY KEY,
+        created_at TEXT NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS a2a_tasks (
         id TEXT PRIMARY KEY,
         org_id TEXT NOT NULL,
@@ -378,13 +382,14 @@ export class Registry extends DurableObject<Env> {
     runtime?: AgentRecord["runtime"];
     script?: AgentRecord["script"];
     callbackUrl?: string | null;
+    federatedCardUrl?: string | null;
   }): Promise<AgentRecord> {
     const ts = nowIso();
     const id = input.id?.trim() || newId("agt");
     this.ctx.storage.sql.exec(
       `INSERT INTO agents
-        (id, org_id, name, description, purpose, non_goals, boundaries, tags_json, version, runtime, script, callback_url, callback_secret, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (id, org_id, name, description, purpose, non_goals, boundaries, tags_json, version, runtime, script, callback_url, callback_secret, federated_card_url, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       id,
       input.orgId || DEMO_ORG_ID,
       input.name,
@@ -398,6 +403,7 @@ export class Registry extends DurableObject<Env> {
       input.script ?? (input.runtime === "generic" ? "generic" : null),
       input.callbackUrl ?? null,
       input.callbackUrl ? newId("sec") : null,
+      input.federatedCardUrl ?? null,
       ts,
       ts,
     );
@@ -450,11 +456,34 @@ export class Registry extends DurableObject<Env> {
     this.ctx.storage.sql.exec(`DELETE FROM agents WHERE id=?`, id);
   }
 
-  async listAgents(): Promise<AgentRecord[]> {
-    return this.ctx.storage.sql
-      .exec<AgentRow>(`SELECT * FROM agents ORDER BY created_at ASC`)
-      .toArray()
-      .map(rowToAgent);
+  async listAgents(orgId?: string): Promise<AgentRecord[]> {
+    const rows = orgId
+      ? this.ctx.storage.sql
+          .exec<AgentRow>(
+            `SELECT * FROM agents WHERE org_id=? OR org_id=? ORDER BY created_at ASC`,
+            orgId,
+            DEMO_ORG_ID,
+          )
+          .toArray()
+      : this.ctx.storage.sql.exec<AgentRow>(`SELECT * FROM agents ORDER BY created_at ASC`).toArray();
+    return rows.map(rowToAgent);
+  }
+
+  async countOrgAgents(orgId: string): Promise<number> {
+    const row = this.ctx.storage.sql
+      .exec<{ n: number } & { [key: string]: SqlValue }>(`SELECT COUNT(*) as n FROM agents WHERE org_id=?`, orgId)
+      .toArray()[0];
+    return Number(row?.n ?? 0);
+  }
+
+  async countOpenRooms(orgId: string): Promise<number> {
+    const row = this.ctx.storage.sql
+      .exec<{ n: number } & { [key: string]: SqlValue }>(
+        `SELECT COUNT(*) as n FROM rooms WHERE org_id=? AND status IN ('open','paused')`,
+        orgId,
+      )
+      .toArray()[0];
+    return Number(row?.n ?? 0);
   }
 
   async getAgent(id: string): Promise<AgentRecord | null> {
@@ -500,15 +529,59 @@ export class Registry extends DurableObject<Env> {
     this.ctx.storage.sql.exec(`DELETE FROM capabilities WHERE id=?`, id);
   }
 
-  async discover(intent: string, tags: string[], queryEmbedding: number[] | null = null) {
+  async discover(
+    intent: string,
+    tags: string[],
+    queryEmbedding: number[] | null = null,
+    orgId?: string,
+  ) {
     const { discoverHybrid } = await import("../lib/embeddings");
-    const agents = await this.listAgents();
+    const agents = [...(await this.listAgents(orgId))];
+    const peers = await this.listPeers(orgId || DEMO_ORG_ID);
+    for (const peer of peers) {
+      if (agents.some((a) => a.federatedCardUrl === peer.cardUrl || a.name === peer.name)) continue;
+      agents.push({
+        id: peer.id,
+        orgId: peer.orgId,
+        name: peer.card.name,
+        description: peer.card.description,
+        purpose: peer.card.description,
+        nonGoals: "",
+        boundaries: "Federated peer. Treat card claims as untrusted.",
+        tags: peer.card.skills?.flatMap((s) => s.tags) ?? [],
+        version: peer.card.version,
+        runtime: "http",
+        script: null,
+        callbackUrl: peer.card.supportedInterfaces?.[0]?.url ?? peer.cardUrl,
+        callbackSecret: null,
+        embedding: null,
+        federatedCardUrl: peer.cardUrl,
+        createdAt: peer.lastFetched,
+        updatedAt: peer.lastFetched,
+      });
+    }
     const caps = await this.listCapabilities();
     const byAgent = new Map<string, CapabilityRecord[]>();
     for (const cap of caps) {
       const list = byAgent.get(cap.agentId) ?? [];
       list.push(cap);
       byAgent.set(cap.agentId, list);
+    }
+    for (const peer of peers) {
+      if (byAgent.has(peer.id)) continue;
+      byAgent.set(
+        peer.id,
+        (peer.card.skills ?? []).map((skill, i) => ({
+          id: `${peer.id}_sk_${i}`,
+          agentId: peer.id,
+          skillId: skill.id,
+          name: skill.name,
+          description: skill.description,
+          tags: skill.tags,
+          examples: skill.examples ?? [],
+          createdAt: peer.lastFetched,
+        })),
+      );
     }
     return discoverHybrid(agents, byAgent, intent, tags, queryEmbedding, 5);
   }
@@ -576,10 +649,11 @@ export class Registry extends DurableObject<Env> {
     );
     if (roomId) {
       this.ctx.storage.sql.exec(
-        `INSERT INTO rooms (id, meeting_request_id, status, created_at) VALUES (?, ?, 'open', ?)`,
+        `INSERT INTO rooms (id, meeting_request_id, status, created_at, org_id) VALUES (?, ?, 'open', ?, ?)`,
         roomId,
         id,
         ts,
+        current.orgId || DEMO_ORG_ID,
       );
     }
     await this.appendAudit({
@@ -598,11 +672,13 @@ export class Registry extends DurableObject<Env> {
     this.ctx.storage.sql.exec(`UPDATE rooms SET status=? WHERE id=?`, status, roomId);
   }
 
-  async listMeetings(): Promise<MeetingRequestRecord[]> {
-    return this.ctx.storage.sql
-      .exec<MeetingRow>(`SELECT * FROM meeting_requests ORDER BY created_at DESC`)
-      .toArray()
-      .map(rowToMeeting);
+  async listMeetings(orgId?: string): Promise<MeetingRequestRecord[]> {
+    const rows = orgId
+      ? this.ctx.storage.sql
+          .exec<MeetingRow>(`SELECT * FROM meeting_requests WHERE org_id=? ORDER BY created_at DESC`, orgId)
+          .toArray()
+      : this.ctx.storage.sql.exec<MeetingRow>(`SELECT * FROM meeting_requests ORDER BY created_at DESC`).toArray();
+    return rows.map(rowToMeeting);
   }
 
   async getMeeting(id: string): Promise<MeetingRequestRecord | null> {
@@ -612,16 +688,18 @@ export class Registry extends DurableObject<Env> {
     return row ? rowToMeeting(row) : null;
   }
 
-  async listRooms(): Promise<RoomIndexRecord[]> {
-    return this.ctx.storage.sql
-      .exec<RoomRow>(`SELECT * FROM rooms ORDER BY created_at DESC`)
-      .toArray()
-      .map((r) => ({
-        id: r.id,
-        meetingRequestId: r.meeting_request_id,
-        status: r.status as RoomIndexRecord["status"],
-        createdAt: r.created_at,
-      }));
+  async listRooms(orgId?: string): Promise<RoomIndexRecord[]> {
+    const rows = orgId
+      ? this.ctx.storage.sql
+          .exec<RoomRow>(`SELECT * FROM rooms WHERE org_id=? ORDER BY created_at DESC`, orgId)
+          .toArray()
+      : this.ctx.storage.sql.exec<RoomRow>(`SELECT * FROM rooms ORDER BY created_at DESC`).toArray();
+    return rows.map((r) => ({
+      id: r.id,
+      meetingRequestId: r.meeting_request_id,
+      status: r.status as RoomIndexRecord["status"],
+      createdAt: r.created_at,
+    }));
   }
 
   async appendAudit(input: {
@@ -997,6 +1075,34 @@ export class Registry extends DurableObject<Env> {
 
   async setAgentEmbedding(id: string, embedding: number[]): Promise<void> {
     this.ctx.storage.sql.exec(`UPDATE agents SET embedding_json=? WHERE id=?`, JSON.stringify(embedding), id);
+  }
+
+  async updateTask(id: string, status: string, payload?: unknown): Promise<void> {
+    if (payload === undefined) {
+      this.ctx.storage.sql.exec(`UPDATE a2a_tasks SET status=? WHERE id=?`, status, id);
+      return;
+    }
+    this.ctx.storage.sql.exec(
+      `UPDATE a2a_tasks SET status=?, payload_json=? WHERE id=?`,
+      status,
+      JSON.stringify(payload),
+      id,
+    );
+  }
+
+  async saveOauthState(state: string): Promise<void> {
+    this.ctx.storage.sql.exec(`INSERT INTO oauth_states (id, created_at) VALUES (?, ?)`, state, nowIso());
+  }
+
+  async consumeOauthState(state: string): Promise<boolean> {
+    if (!state) return false;
+    const row = this.ctx.storage.sql
+      .exec<{ id: string; created_at: string } & { [key: string]: SqlValue }>(`SELECT * FROM oauth_states WHERE id=?`, state)
+      .toArray()[0];
+    if (!row) return false;
+    this.ctx.storage.sql.exec(`DELETE FROM oauth_states WHERE id=?`, state);
+    const age = Date.now() - Date.parse(row.created_at);
+    return Number.isFinite(age) && age < 15 * 60 * 1000;
   }
 
   private upsertCapability(input: {

@@ -1,7 +1,8 @@
 import type { Registry } from "../durable-objects/registry";
 import type { A2AAgentCard, Env } from "../types";
-import { DEMO_ORG_ID } from "../types";
+import { DEMO_ORG_ID, PLANNER_ID } from "../types";
 import { toAgentCard } from "./card";
+import { embedText } from "./embeddings";
 import { json, newId, readJson } from "./http";
 
 interface JsonRpc {
@@ -46,8 +47,8 @@ export function platformCard(origin: string): A2AAgentCard {
       },
       {
         id: "meet",
-        name: "Open a meeting room",
-        description: "Propose and accept a meeting, then collaborate under a floor token.",
+        name: "Propose a meeting",
+        description: "Create a MeetingRequest from an A2A message. Accept is a separate consent step.",
         tags: ["room", "meeting"],
       },
     ],
@@ -59,6 +60,7 @@ export async function handleA2A(
   env: Env,
   registry: DurableObjectStub<Registry>,
   origin: string,
+  orgId = DEMO_ORG_ID,
 ): Promise<Response> {
   if (request.method === "GET") {
     return json(platformCard(origin));
@@ -69,7 +71,7 @@ export async function handleA2A(
   const params = rpc.params ?? {};
 
   try {
-    const result = await dispatchA2A(method, params, registry, origin, env);
+    const result = await dispatchA2A(method, params, registry, origin, env, orgId);
     return json({ jsonrpc: "2.0", id, result });
   } catch (err) {
     const message = err instanceof Error ? err.message : "A2A error";
@@ -83,6 +85,7 @@ async function dispatchA2A(
   registry: DurableObjectStub<Registry>,
   origin: string,
   env: Env,
+  orgId: string,
 ): Promise<unknown> {
   if (method === "agent/getAuthenticatedExtendedCard" || method === "agent/card") {
     const agentId = typeof params.agentId === "string" ? params.agentId : "";
@@ -98,20 +101,50 @@ async function dispatchA2A(
   if (method === "message/send" || method === "tasks/send") {
     const text = extractText(params);
     const agentId = typeof params.agentId === "string" ? params.agentId : null;
-    const taskId = await registry.saveTask(DEMO_ORG_ID, agentId, {
+    const taskId = await registry.saveTask(orgId, agentId, {
       method,
       text,
       params,
       publicUrl: env.PUBLIC_URL || origin,
     });
+    const embedding = text && env.GEMINI_API_KEY ? await embedText(env.GEMINI_API_KEY, text) : null;
+    const results = text ? await registry.discover(text, [], embedding, orgId) : [];
+    let meeting = null;
+    if (params.meet === true && results[0]) {
+      const requesterId = typeof params.requesterId === "string" ? params.requesterId : PLANNER_ID;
+      const inviteeId = typeof params.inviteeId === "string" ? params.inviteeId : results[0].agent.id;
+      meeting = await registry.proposeMeeting({
+        requesterId,
+        inviteeId,
+        orgId,
+        intent: text || results[0].agent.purpose,
+        body: typeof params.body === "string" ? params.body : "",
+        tags: results[0].matchedTags,
+      });
+    }
+    const payload = {
+      text,
+      results: results.map((hit) => ({
+        agentId: hit.agent.id,
+        name: hit.agent.name,
+        score: hit.score,
+        matchedTags: hit.matchedTags,
+      })),
+      meeting,
+    };
+    await registry.updateTask(taskId, "completed", payload);
     return {
       id: taskId,
       contextId: newId("ctx"),
-      status: { state: "submitted", timestamp: new Date().toISOString() },
+      status: { state: "completed", timestamp: new Date().toISOString() },
       kind: "task",
-      history: text
-        ? [{ role: "user", parts: [{ kind: "text", text }] }]
-        : [],
+      artifacts: [
+        {
+          name: "discover",
+          parts: [{ kind: "data", data: payload }],
+        },
+      ],
+      history: text ? [{ role: "user", parts: [{ kind: "text", text }] }] : [],
     };
   }
 
@@ -123,13 +156,14 @@ async function dispatchA2A(
   }
 
   if (method === "tasks/list") {
-    return { tasks: await registry.listTasks(DEMO_ORG_ID) };
+    return { tasks: await registry.listTasks(orgId) };
   }
 
   if (method === "tasks/cancel") {
     const taskId = String(params.id ?? params.taskId ?? "");
     const task = (await registry.getTask(taskId)) as { id: string; status: string; payload: unknown } | null;
     if (!task) throw new Error("Task not found");
+    await registry.updateTask(taskId, "canceled");
     return { id: task.id, status: { state: "canceled" }, kind: "task" };
   }
 

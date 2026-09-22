@@ -18,8 +18,8 @@ export async function handleEchoTwin(request: Request): Promise<Response> {
   const raw = await request.text();
   const ts = request.headers.get("x-twinmeet-timestamp") || "";
   const sig = request.headers.get("x-twinmeet-signature") || "";
-  if (sig && !(await verifyHmac(ECHO_SECRET, `${ts}.${raw}`, sig))) {
-    return error(401, "Invalid TwinMeet callback signature");
+  if (!sig || !ts || !(await verifyHmac(ECHO_SECRET, `${ts}.${raw}`, sig))) {
+    return error(401, "HMAC signature required");
   }
   let payload: HookBody = {};
   try {

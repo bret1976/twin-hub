@@ -1,5 +1,9 @@
 import type { A2AAgentCard, AgentRecord, CapabilityRecord } from "../types";
 
+export function toPublicAgent(agent: AgentRecord): AgentRecord {
+  return { ...agent, callbackSecret: null };
+}
+
 export function toAgentCard(
   agent: AgentRecord,
   capabilities: CapabilityRecord[],

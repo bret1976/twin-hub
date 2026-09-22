@@ -1,5 +1,8 @@
 import type { Registry } from "../durable-objects/registry";
 import type { Env } from "../types";
+import { DEMO_ORG_ID } from "../types";
+import { toPublicAgent } from "./card";
+import { embedText } from "./embeddings";
 import { json, parseTags, readJson } from "./http";
 
 interface JsonRpc {
@@ -72,12 +75,34 @@ const TOOLS = [
       required: ["roomId"],
     },
   },
+  {
+    name: "twinmeet_vote",
+    description: "Cast a room vote on an artifact or resolve.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        roomId: { type: "string" },
+        subject: { type: "string", enum: ["artifact", "resolve"] },
+        decision: { type: "string", enum: ["approve", "reject"] },
+      },
+      required: ["roomId"],
+    },
+  },
+  {
+    name: "twinmeet_memory",
+    description: "Search org memory from resolved meetings.",
+    inputSchema: {
+      type: "object",
+      properties: { query: { type: "string" } },
+    },
+  },
 ];
 
 export async function handleMcp(
   request: Request,
   env: Env,
   registry: DurableObjectStub<Registry>,
+  orgId = DEMO_ORG_ID,
 ): Promise<Response> {
   if (request.method === "GET") {
     return json({
@@ -92,7 +117,7 @@ export async function handleMcp(
   const params = rpc.params ?? {};
 
   try {
-    const result = await dispatchMcp(method, params, registry, env);
+    const result = await dispatchMcp(method, params, registry, env, orgId);
     return json({ jsonrpc: "2.0", id, result });
   } catch (err) {
     const message = err instanceof Error ? err.message : "MCP error";
@@ -105,6 +130,7 @@ async function dispatchMcp(
   params: Record<string, unknown>,
   registry: DurableObjectStub<Registry>,
   env: Env,
+  orgId: string,
 ): Promise<unknown> {
   if (method === "initialize" || method === "notifications/initialized") {
     return {
@@ -115,10 +141,11 @@ async function dispatchMcp(
   }
   if (method === "ping") return {};
   if (method === "tools/list") return { tools: TOOLS };
+  if (method === "resources/list") return { resources: [] };
   if (method === "tools/call") {
     const name = String(params.name ?? "");
     const args = isRecord(params.arguments) ? params.arguments : params;
-    const text = await callTool(name, args, registry, env);
+    const text = await callTool(name, args, registry, env, orgId);
     return { content: [{ type: "text", text }] };
   }
   throw new Error(`Unknown MCP method: ${method || "(missing)"}`);
@@ -129,20 +156,28 @@ async function callTool(
   args: Record<string, unknown>,
   registry: DurableObjectStub<Registry>,
   env: Env,
+  orgId: string,
 ): Promise<string> {
   if (name === "twinmeet_discover") {
     const intent = String(args.intent ?? "");
     const tags = parseTags(String(args.tags ?? ""));
-    const results = await registry.discover(intent, tags);
-    return JSON.stringify(results, null, 2);
+    const embedding = intent && env.GEMINI_API_KEY ? await embedText(env.GEMINI_API_KEY, intent) : null;
+    const results = await registry.discover(intent, tags, embedding, orgId);
+    return JSON.stringify(
+      results.map((hit) => ({ ...hit, agent: toPublicAgent(hit.agent) })),
+      null,
+      2,
+    );
   }
   if (name === "twinmeet_list_agents") {
-    return JSON.stringify(await registry.listAgents(), null, 2);
+    const agents = (await registry.listAgents(orgId)).map(toPublicAgent);
+    return JSON.stringify(agents, null, 2);
   }
   if (name === "twinmeet_propose_meeting") {
     const meeting = await registry.proposeMeeting({
       requesterId: String(args.requesterId ?? ""),
       inviteeId: String(args.inviteeId ?? ""),
+      orgId,
       intent: String(args.intent ?? ""),
       body: typeof args.body === "string" ? args.body : "",
       tags: parseTags(typeof args.tags === "string" ? args.tags : ""),
@@ -174,6 +209,26 @@ async function callTool(
       approve(actorId: string, decision: "approve" | "reject"): Promise<unknown>;
     };
     return JSON.stringify(await stub.approve("human", decision), null, 2);
+  }
+  if (name === "twinmeet_vote") {
+    const roomId = String(args.roomId ?? "");
+    const stub = env.ROOM.getByName(roomId) as unknown as {
+      vote(voterId: string, subject: "artifact" | "resolve", decision: "approve" | "reject"): Promise<unknown>;
+    };
+    return JSON.stringify(
+      await stub.vote(
+        "human",
+        args.subject === "resolve" ? "resolve" : "artifact",
+        args.decision === "reject" ? "reject" : "approve",
+      ),
+      null,
+      2,
+    );
+  }
+  if (name === "twinmeet_memory") {
+    const query = String(args.query ?? "");
+    const embedding = query && env.GEMINI_API_KEY ? await embedText(env.GEMINI_API_KEY, query) : null;
+    return JSON.stringify(await registry.listMemory(orgId, embedding), null, 2);
   }
   throw new Error(`Unknown tool: ${name}`);
 }
