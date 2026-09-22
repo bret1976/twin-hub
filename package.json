@@ -3,35 +3,39 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
-    "dev": "vite --host 0.0.0.0 --port 45454",
+    "dev": "vite --host 0.0.0.0 --port ${PORT:-45454}",
+    "start": "npx vite --host 0.0.0.0 --port ${PORT:-45454}",
     "build": "tsc -b && vite build",
-    "preview": "npm run build && vite preview --host 127.0.0.1 --port 45454",
+    "preview": "npm run build && vite preview --host 0.0.0.0 --port ${PORT:-45454}",
     "deploy": "npm run build && wrangler deploy",
     "types": "wrangler types",
     "demo": "tsx scripts/demo.ts",
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {
+    "@cloudflare/vite-plugin": "^1.13.8",
+    "@tailwindcss/vite": "^4.1.13",
+    "@vitejs/plugin-react": "^6.1.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^0.544.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
-    "tailwind-merge": "^3.3.1"
+    "tailwind-merge": "^3.3.1",
+    "tailwindcss": "^4.1.13",
+    "vite": "^8.3.0",
+    "wrangler": "^4.40.0"
   },
   "devDependencies": {
-    "@cloudflare/vite-plugin": "^1.13.8",
     "@cloudflare/workers-types": "latest",
-    "@tailwindcss/vite": "^4.1.13",
     "@types/node": "^24.13.3",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",
-    "@vitejs/plugin-react": "^6.1.1",
-    "tailwindcss": "^4.1.13",
     "tsx": "^4.20.5",
-    "typescript": "~5.9.2",
-    "vite": "^8.3.0",
-    "wrangler": "^4.40.0"
+    "typescript": "~5.9.2"
   }
 }
