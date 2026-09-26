@@ -38,6 +38,26 @@ interface RoomRpc {
   escalate(actorId: string, reason: string): Promise<RoomSnapshot>;
   vote(voterId: string, subject: VoteRecord["subject"], decision: VoteRecord["decision"]): Promise<RoomSnapshot>;
   joinMember(member: RoomMember): Promise<RoomSnapshot>;
+  searchTranscript(
+    query: string,
+    limit?: number,
+  ): Promise<{
+    roomId: string;
+    intent: string;
+    status: string;
+    query: string;
+    hits: Array<{
+      messageId: string;
+      seq: number;
+      type: string;
+      authorId: string;
+      authorName: string;
+      body: string;
+      createdAt: string;
+      score: number;
+      snippet: string;
+    }>;
+  }>;
 }
 
 export { Registry, Room };
@@ -136,6 +156,8 @@ async function route(request: Request, env: Env): Promise<Response> {
       mcp: true,
       oidc: Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET),
       stripe: Boolean(env.STRIPE_SECRET_KEY),
+      speechTranscribe: true,
+      transcriptSearch: true,
       auth: true,
     });
   }
@@ -411,6 +433,57 @@ async function route(request: Request, env: Env): Promise<Response> {
   const roomTick = match(path, /^\/v1\/rooms\/([^/]+)\/tick$/);
   if (roomTick && request.method === "POST") {
     return json({ room: await roomStub(env, roomTick[1]).tick() });
+  }
+
+
+  const roomTranscriptSearch = match(path, /^\/v1\/rooms\/([^/]+)\/transcript\/search$/);
+  if (roomTranscriptSearch && request.method === "GET") {
+    const q = url.searchParams.get("q") ?? "";
+    const limit = Number(url.searchParams.get("limit") || "40");
+    const result = await roomStub(env, roomTranscriptSearch[1]).searchTranscript(q, Number.isFinite(limit) ? limit : 40);
+    return json(result);
+  }
+
+  if (request.method === "GET" && path === "/v1/transcripts/search") {
+    const q = (url.searchParams.get("q") ?? "").trim();
+    const limit = Math.max(1, Math.min(Number(url.searchParams.get("limit") || "40") || 40, 100));
+    const roomLimit = Math.max(1, Math.min(Number(url.searchParams.get("roomLimit") || "25") || 25, 50));
+    if (!q) return json({ query: q, hits: [], roomsSearched: 0 });
+    const rooms = (await registry.listRooms(orgId)).slice(0, roomLimit);
+    const perRoom = Math.max(3, Math.ceil(limit / Math.max(rooms.length, 1)));
+    const batches = await Promise.all(
+      rooms.map(async (room) => {
+        try {
+          const result = await roomStub(env, room.id).searchTranscript(q, perRoom);
+          return result.hits.map((hit) => ({
+            ...hit,
+            roomId: result.roomId,
+            intent: result.intent,
+            roomStatus: result.status,
+          }));
+        } catch {
+          return [] as Array<{
+            messageId: string;
+            seq: number;
+            type: string;
+            authorId: string;
+            authorName: string;
+            body: string;
+            createdAt: string;
+            score: number;
+            snippet: string;
+            roomId: string;
+            intent: string;
+            roomStatus: string;
+          }>;
+        }
+      }),
+    );
+    const hits = batches
+      .flat()
+      .sort((a, b) => b.score - a.score || b.createdAt.localeCompare(a.createdAt))
+      .slice(0, limit);
+    return json({ query: q, hits, roomsSearched: rooms.length });
   }
 
   const roomMessages = match(path, /^\/v1\/rooms\/([^/]+)\/messages$/);

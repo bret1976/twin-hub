@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/input";
+import { Input, Textarea } from "@/components/ui/input";
 import { api, type Health, type RoomMessage, type RoomSnapshot } from "@/lib/api";
 
 export function RoomPage({ roomId, onHome }: { roomId: string; onHome?: () => void }) {
@@ -9,6 +9,7 @@ export function RoomPage({ roomId, onHome }: { roomId: string; onHome?: () => vo
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [health, setHealth] = useState<Health | null>(null);
+  const [filter, setFilter] = useState("");
   const logRef = useRef<HTMLDivElement>(null);
 
   async function refresh() {
@@ -81,7 +82,15 @@ export function RoomPage({ roomId, onHome }: { roomId: string; onHome?: () => vo
     return <p className="px-4 pt-16 text-center text-muted">The bots are sitting down…</p>;
   }
 
-  const visible = room.messages.filter((m) => m.type !== "audit");
+  const needle = filter.trim().toLowerCase();
+  const visible = room.messages.filter((m) => {
+    if (m.type === "audit") return false;
+    if (!needle) return true;
+    return (
+      m.body.toLowerCase().includes(needle) ||
+      m.authorName.toLowerCase().includes(needle)
+    );
+  });
   const gemini = (room.twinMode ?? health?.twinMode) !== "scripted";
 
   return (
@@ -92,12 +101,26 @@ export function RoomPage({ roomId, onHome }: { roomId: string; onHome?: () => vo
           <p className="mt-1 text-xs text-muted">
             {twins.map((t) => t.name).join("  ·  ") || "Two twins"}
             {gemini ? "  ·  Gemini" : "  ·  practice mode"}
+            {health?.transcriptSearch ? "  ·  search on" : ""}
           </p>
         </div>
         <button type="button" className="text-xs text-muted hover:text-paper" onClick={onHome}>
           New chat
         </button>
       </header>
+
+      <div className="mb-3">
+        <Input
+          placeholder="Filter this room’s transcript…"
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+        />
+        {needle && (
+          <p className="mt-1 text-xs text-muted">
+            Showing {visible.length} of {room.messages.filter((m) => m.type !== "audit").length} messages
+          </p>
+        )}
+      </div>
 
       <div ref={logRef} className="min-h-0 flex-1 space-y-5 overflow-y-auto pb-4">
         {visible.length === 0 && (

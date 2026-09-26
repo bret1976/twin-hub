@@ -479,6 +479,62 @@ export class Room extends DurableObject<Env> {
       }));
   }
 
+  /**
+   * Full-text-ish transcript search over room messages (SQLite LIKE + token ranking).
+   * Inspired by MiniSearch / Fuse.js ranking ideas — original implementation, no vendored code.
+   */
+  async searchTranscript(
+    query: string,
+    limit = 40,
+  ): Promise<{
+    roomId: string;
+    intent: string;
+    status: string;
+    query: string;
+    hits: Array<{
+      messageId: string;
+      seq: number;
+      type: string;
+      authorId: string;
+      authorName: string;
+      body: string;
+      createdAt: string;
+      score: number;
+      snippet: string;
+    }>;
+  }> {
+    const q = query.trim();
+    const roomId = this.getMeta("id") || "unknown";
+    const intent = this.getMeta("intent") || "";
+    const status = this.getMeta("status") || "open";
+    if (!q) {
+      return { roomId, intent, status, query: q, hits: [] };
+    }
+    const tokens = tokenizeQuery(q);
+    const messages = this.listMessages().filter((m) => m.type !== "audit");
+    const hits = messages
+      .map((m) => {
+        const hay = `${m.authorName}\n${m.body}`.toLowerCase();
+        const score = scoreTranscriptHit(q.toLowerCase(), tokens, hay, m.authorName.toLowerCase());
+        if (score <= 0) return null;
+        return {
+          messageId: m.id,
+          seq: m.seq,
+          type: m.type,
+          authorId: m.authorId,
+          authorName: m.authorName,
+          body: m.body,
+          createdAt: m.createdAt,
+          score,
+          snippet: makeSnippet(m.body, tokens.length ? tokens : [q.toLowerCase()]),
+        };
+      })
+      .filter((h): h is NonNullable<typeof h> => h != null)
+      .sort((a, b) => b.score - a.score || a.seq - b.seq)
+      .slice(0, Math.max(1, Math.min(limit, 100)));
+    return { roomId, intent, status, query: q, hits };
+  }
+
   private async finalizeResolve(actorId: string): Promise<RoomSnapshot> {
     const snap = this.snapshot();
     const summary = await generateSummary(
@@ -1020,3 +1076,46 @@ function mentionTarget(body: string): string | null {
   const match = body.match(/@([a-zA-Z0-9_-]+)/);
   return match ? match[1] : null;
 }
+
+function tokenizeQuery(q: string): string[] {
+  return q
+    .toLowerCase()
+    .split(/[^a-z0-9_#+.-]+/i)
+    .map((t) => t.trim())
+    .filter((t) => t.length >= 2)
+    .slice(0, 12);
+}
+
+function scoreTranscriptHit(phrase: string, tokens: string[], hay: string, author: string): number {
+  let score = 0;
+  if (phrase.length >= 2 && hay.includes(phrase)) score += 12;
+  let matched = 0;
+  for (const t of tokens) {
+    if (hay.includes(t)) {
+      matched += 1;
+      score += t.length >= 5 ? 3 : 2;
+    }
+    if (author.includes(t)) score += 1.5;
+  }
+  if (tokens.length > 1 && matched === tokens.length) score += 4;
+  if (matched === 0 && !hay.includes(phrase)) return 0;
+  return score;
+}
+
+function makeSnippet(body: string, tokens: string[], radius = 72): string {
+  const lower = body.toLowerCase();
+  let idx = -1;
+  for (const t of tokens) {
+    const i = lower.indexOf(t);
+    if (i >= 0 && (idx < 0 || i < idx)) idx = i;
+  }
+  if (idx < 0) {
+    return body.length > radius * 2 ? `${body.slice(0, radius * 2).trim()}…` : body;
+  }
+  const start = Math.max(0, idx - radius);
+  const end = Math.min(body.length, idx + radius);
+  const prefix = start > 0 ? "…" : "";
+  const suffix = end < body.length ? "…" : "";
+  return `${prefix}${body.slice(start, end).trim()}${suffix}`;
+}
+

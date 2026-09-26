@@ -153,6 +153,23 @@ export interface Health {
   mcp?: boolean;
   oidc?: boolean;
   stripe?: boolean;
+  speechTranscribe?: boolean;
+  transcriptSearch?: boolean;
+}
+
+export interface TranscriptHit {
+  messageId: string;
+  seq: number;
+  type: string;
+  authorId: string;
+  authorName: string;
+  body: string;
+  createdAt: string;
+  score: number;
+  snippet: string;
+  roomId?: string;
+  intent?: string;
+  roomStatus?: string;
 }
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
@@ -282,6 +299,18 @@ export const api = {
     req<{ peer: FederatedPeer }>("/v1/peers", { method: "POST", body: JSON.stringify({ cardUrl }) }),
   a2aCard: () => req<Record<string, unknown>>("/.well-known/agent-card.json"),
   mcpTools: () => req<{ tools: Array<{ name: string; description: string }> }>("/v1/mcp"),
+  roomTranscriptSearch: (roomId: string, q: string, limit = 40) =>
+    req<{
+      roomId: string;
+      intent: string;
+      status: string;
+      query: string;
+      hits: TranscriptHit[];
+    }>(`/v1/rooms/${roomId}/transcript/search?q=${encodeURIComponent(q)}&limit=${limit}`),
+  transcriptsSearch: (q: string, limit = 40) =>
+    req<{ query: string; hits: TranscriptHit[]; roomsSearched: number }>(
+      `/v1/transcripts/search?q=${encodeURIComponent(q)}&limit=${limit}`,
+    ),
 };
 
 function encodeURIContent(q: string): string {
