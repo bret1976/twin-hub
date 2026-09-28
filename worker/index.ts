@@ -6,6 +6,7 @@ import { GeminiHttpError, geminiGenerate, geminiTranscribe, twinMode } from "./l
 import { handleA2A, platformCard } from "./lib/a2a";
 import { handleMcp } from "./lib/mcp";
 import { handleEchoTwin } from "./lib/hooks";
+import { exportMinutes } from "./lib/minutes";
 import { createCheckoutSession, verifyStripeSignature } from "./lib/stripe";
 import { Registry } from "./durable-objects/registry";
 import { Room } from "./durable-objects/room";
@@ -40,6 +41,27 @@ interface RoomRpc {
   escalate(actorId: string, reason: string): Promise<RoomSnapshot>;
   vote(voterId: string, subject: VoteRecord["subject"], decision: VoteRecord["decision"]): Promise<RoomSnapshot>;
   joinMember(member: RoomMember): Promise<RoomSnapshot>;
+  searchTranscript(
+    query: string,
+    limit?: number,
+  ): Promise<{
+    roomId: string;
+    intent: string;
+    status: string;
+    query: string;
+    hits: Array<{
+      messageId: string;
+      seq: number;
+      type: string;
+      authorId: string;
+      authorName: string;
+      body: string;
+      createdAt: string;
+      score: number;
+      snippet: string;
+    }>;
+  }>;
+  getMinutes(): Promise<import("./lib/minutes").RoomMinutes>;
 }
 
 export { Registry, Room };
@@ -139,6 +161,8 @@ async function route(request: Request, env: Env): Promise<Response> {
       oidc: Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET),
       stripe: Boolean(env.STRIPE_SECRET_KEY),
       speechTranscribe: Boolean(env.GEMINI_API_KEY),
+      transcriptSearch: true,
+      roomMinutes: true,
       auth: true,
     });
   }
@@ -427,6 +451,79 @@ async function route(request: Request, env: Env): Promise<Response> {
   const roomTick = match(path, /^\/v1\/rooms\/([^/]+)\/tick$/);
   if (roomTick && request.method === "POST") {
     return json({ room: await roomStub(env, roomTick[1]).tick() });
+  }
+
+
+  const roomTranscriptSearch = match(path, /^\/v1\/rooms\/([^/]+)\/transcript\/search$/);
+  if (roomTranscriptSearch && request.method === "GET") {
+    const q = url.searchParams.get("q") ?? "";
+    const limit = Number(url.searchParams.get("limit") || "40");
+    const result = await roomStub(env, roomTranscriptSearch[1]).searchTranscript(q, Number.isFinite(limit) ? limit : 40);
+    return json(result);
+  }
+
+  const roomMinutesExport = match(path, /^\/v1\/rooms\/([^/]+)\/minutes\/export$/);
+  if (roomMinutesExport && request.method === "GET") {
+    const minutes = await roomStub(env, roomMinutesExport[1]).getMinutes();
+    const raw = (url.searchParams.get("format") || "md").toLowerCase();
+    const format = raw === "json" || raw === "txt" ? raw : "md";
+    const exported = exportMinutes(minutes, format);
+    return new Response(exported.body, {
+      status: 200,
+      headers: {
+        "content-type": exported.contentType,
+        "content-disposition": `attachment; filename="${exported.filename}"`,
+        "cache-control": "no-store",
+      },
+    });
+  }
+
+  const roomMinutes = match(path, /^\/v1\/rooms\/([^/]+)\/minutes$/);
+  if (roomMinutes && request.method === "GET") {
+    const minutes = await roomStub(env, roomMinutes[1]).getMinutes();
+    return json({ minutes });
+  }
+
+  if (request.method === "GET" && path === "/v1/transcripts/search") {
+    const q = (url.searchParams.get("q") ?? "").trim();
+    const limit = Math.max(1, Math.min(Number(url.searchParams.get("limit") || "40") || 40, 100));
+    const roomLimit = Math.max(1, Math.min(Number(url.searchParams.get("roomLimit") || "25") || 25, 50));
+    if (!q) return json({ query: q, hits: [], roomsSearched: 0 });
+    const rooms = (await registry.listRooms(orgId)).slice(0, roomLimit);
+    const perRoom = Math.max(3, Math.ceil(limit / Math.max(rooms.length, 1)));
+    const batches = await Promise.all(
+      rooms.map(async (room) => {
+        try {
+          const result = await roomStub(env, room.id).searchTranscript(q, perRoom);
+          return result.hits.map((hit) => ({
+            ...hit,
+            roomId: result.roomId,
+            intent: result.intent,
+            roomStatus: result.status,
+          }));
+        } catch {
+          return [] as Array<{
+            messageId: string;
+            seq: number;
+            type: string;
+            authorId: string;
+            authorName: string;
+            body: string;
+            createdAt: string;
+            score: number;
+            snippet: string;
+            roomId: string;
+            intent: string;
+            roomStatus: string;
+          }>;
+        }
+      }),
+    );
+    const hits = batches
+      .flat()
+      .sort((a, b) => b.score - a.score || b.createdAt.localeCompare(a.createdAt))
+      .slice(0, limit);
+    return json({ query: q, hits, roomsSearched: rooms.length });
   }
 
   const roomMessages = match(path, /^\/v1\/rooms\/([^/]+)\/messages$/);
