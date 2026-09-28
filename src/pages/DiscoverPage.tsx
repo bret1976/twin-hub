@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { MicButton } from "@/components/MicButton";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -57,8 +58,8 @@ export function DiscoverPage({ onOpened }: { onOpened: (roomId: string) => void 
     }
   }
 
-  async function startCustom() {
-    if (!intent.trim()) {
+  async function startCustom(problem = intent) {
+    if (!problem.trim()) {
       setError("Describe the problem first.");
       return;
     }
@@ -67,7 +68,7 @@ export function DiscoverPage({ onOpened }: { onOpened: (roomId: string) => void 
       await api.seed();
       const extra = inviteeList();
       const started = await api.startMeeting({
-        intent: intent.trim(),
+        intent: problem.trim(),
         body,
         tags: tags.split(",").map((t) => t.trim()).filter(Boolean),
         requesterId,
@@ -141,7 +142,16 @@ export function DiscoverPage({ onOpened }: { onOpened: (roomId: string) => void 
                 onChange={(e) => setExtraInvitees(e.target.value)}
               />
             </div>
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <MicButton
+                disabled={busy}
+                value={intent}
+                onChange={setIntent}
+                onFinal={(text) => {
+                  setIntent(text);
+                  void startCustom(text);
+                }}
+              />
               <Button onClick={() => void search()} disabled={busy}>
                 {busy ? "Working…" : "Discover peers"}
               </Button>
@@ -164,7 +174,7 @@ export function DiscoverPage({ onOpened }: { onOpened: (roomId: string) => void 
         {hits.length === 0 && (
           <Card>
             <CardContent className="py-10 text-center text-sm text-muted">
-              No ranking yet. Discover peers, or start a meeting and TwinMeet will pick a specialist.
+              No ranking yet. Discover peers, or start a meeting and eglu will pick a specialist.
             </CardContent>
           </Card>
         )}

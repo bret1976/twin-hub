@@ -26,6 +26,7 @@ export function SettingsPage() {
     ["MCP", health.mcp ? "on" : "off"],
     ["OIDC", health.oidc ? "on" : "off"],
     ["Stripe", health.stripe ? "on" : "off"],
+    ["Mic transcription", health.speechTranscribe ? "Gemini fallback on" : "browser mic only"],
   ];
 
   return (

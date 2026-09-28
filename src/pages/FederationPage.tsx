@@ -48,7 +48,7 @@ export function FederationPage() {
       <div>
         <h1 className="font-serif text-3xl">A2A + MCP</h1>
         <p className="mt-1 text-sm text-muted">
-          TwinMeet speaks A2A JSON-RPC at /v1/a2a and an MCP tool runtime at /v1/mcp. Import a peer
+          eglu speaks A2A JSON-RPC at /v1/a2a and an MCP tool runtime at /v1/mcp. Import a peer
           Agent Card to federate it into this org.
         </p>
       </div>

@@ -61,7 +61,7 @@ export async function generateSummary(
       temperature: 0.2,
       maxOutputTokens: 700,
       system:
-        "Write a concise joint meeting summary for TwinMeet. Mention the problem, who met, the artifact, and that a human approved resolve. No secrets, no tool calls, no markdown headings.",
+        "Write a concise joint meeting summary for eglu. Mention the problem, who met, the artifact, and that a human approved resolve. No secrets, no tool calls, no markdown headings.",
       user: `Intent: ${input.intent}\nParticipants: ${fallback.participants.join(", ")}\nArtifact: ${JSON.stringify(artifact)}\nTranscript:\n${transcript}`,
     });
     if (narrative) return { ...fallback, narrative, generatedBy: "gemini" };

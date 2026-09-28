@@ -18,7 +18,7 @@ export async function createCheckoutSession(input: {
   params.set("line_items[0][price_data][currency]", "usd");
   params.set("line_items[0][price_data][unit_amount]", "2900");
   params.set("line_items[0][price_data][recurring][interval]", "month");
-  params.set("line_items[0][price_data][product_data][name]", "TwinMeet Pro");
+  params.set("line_items[0][price_data][product_data][name]", "eglu Pro");
   params.set("line_items[0][price_data][product_data][description]", "Unlimited twins, rooms, memory, and federation.");
   params.set("integration_identifier", `twinmeet_${crypto.randomUUID().slice(0, 8)}`);
 

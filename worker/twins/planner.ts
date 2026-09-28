@@ -1,7 +1,10 @@
 import type { TwinAction, TwinContext } from "../types";
 import { sanitizePeerText } from "../lib/sanitize";
+import { latestUnansweredHuman, scriptedHumanReply } from "./human";
 
 export function plannerAct(ctx: TwinContext): TwinAction[] {
+  const human = latestUnansweredHuman(ctx);
+  if (human) return [scriptedHumanReply(ctx, human)];
   const mine = ctx.transcript.filter((m) => m.authorId === ctx.selfId);
   const hasArtifact = ctx.transcript.some((m) => m.type === "artifact");
   const intent = sanitizePeerText(ctx.intent);

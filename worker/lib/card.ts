@@ -22,7 +22,7 @@ export function toAgentCard(
       },
     ],
     provider: {
-      organization: "TwinMeet",
+      organization: "eglu",
       url: origin,
     },
     version: agent.version,

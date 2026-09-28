@@ -1,10 +1,12 @@
 import { DurableObject } from "cloudflare:workers";
 import { newId, nowIso } from "../lib/http";
 import { sanitizePeerText } from "../lib/sanitize";
+import { suggestFollowUps, type FollowUp } from "../lib/suggestions";
 import { generateSummary } from "../lib/summary";
 import { callTwinWebhook } from "../lib/callback";
-import { GeminiHttpError, twinMode } from "../lib/gemini";
+import { GeminiHttpError, geminiGenerate, geminiImage, geminiResearch, twinMode, type LiveSource } from "../lib/gemini";
 import { runAnyTwin } from "../twins/dispatch";
+import { addressHumanTurn, latestUnansweredHuman, scriptedHumanReply } from "../twins/human";
 import { embedText } from "../lib/embeddings";
 import type { Registry } from "./registry";
 import type {
@@ -20,6 +22,7 @@ import type {
   RoomSnapshot,
   RoomStatus,
   TwinAction,
+  TwinContext,
   VoteRecord,
 } from "../types";
 
@@ -266,7 +269,7 @@ export class Room extends DurableObject<Env> {
     });
     this.appendMessage({
       authorId: "system",
-      authorName: "TwinMeet",
+      authorName: "eglu",
       type: "system",
       body: `Room opened. Floor granted to ${this.memberName(input.floorHolderId)}. Max ${input.maxRounds} rounds. Human approval required to resolve.`,
     }, { countRound: false, skipFloor: true });
@@ -278,6 +281,16 @@ export class Room extends DurableObject<Env> {
 
   async getSnapshot(): Promise<RoomSnapshot> {
     await this.maybeAdvance();
+    if (this.getMeta("status") === "resolved" && !this.getMeta("suggestionsJson")) {
+      let narrative = "";
+      try {
+        const summary = JSON.parse(this.getMeta("summaryJson") || "null") as { narrative?: string } | null;
+        narrative = summary?.narrative || this.getMeta("intent") || "";
+      } catch {
+        narrative = this.getMeta("intent") || "";
+      }
+      await this.saveSuggestions(narrative);
+    }
     return this.snapshot();
   }
 
@@ -295,23 +308,49 @@ export class Room extends DurableObject<Env> {
   }
 
   async postMessage(input: PostMessageInput): Promise<RoomMessage> {
-    await this.maybeAdvance();
-    const status = this.getMeta("status");
-    if (status === "resolved") throw new Error("Room already resolved");
+    const author = this.getMember(input.authorId);
+    const isHuman = !author || author.role === "human";
+    // A human line has to land before the next twin turn, or that turn can
+    // close the room and the instruction is rejected.
+    if (!isHuman) await this.maybeAdvance();
+
+    let status = this.getMeta("status");
+    const humanChat = isHuman && (input.type === "chat" || input.type === "proposal");
+    if (status === "resolved" && !humanChat) throw new Error("Room already resolved");
+    if (humanChat && status === "resolved") {
+      const rounds = Number(this.getMeta("roundCount") || "0");
+      const max = Number(this.getMeta("maxRounds") || "24");
+      this.setMeta("maxRounds", String(Math.max(max, rounds + 12)));
+    }
+
+    if (humanChat && status !== "open") {
+      this.setMeta("status", "open");
+      this.setMeta("pendingGate", "");
+      this.appendMessage(
+        {
+          authorId: "system",
+          authorName: "eglu",
+          type: "system",
+          body:
+            status === "resolved"
+              ? "You picked the chat back up. The twins will keep going."
+              : "You sent a new instruction. The twins will keep going.",
+        },
+        { countRound: false, skipFloor: true },
+      );
+      status = "open";
+    }
+
     if (status === "paused" && input.type !== "system") {
       throw new Error("Room is paused pending human approval");
     }
 
-    const author = this.getMember(input.authorId);
-    const isHuman = !author || author.role === "human";
-    if (!isHuman) {
-      this.assertFloor(input.authorId, input.body);
-    }
+    if (!isHuman) this.assertFloor(input.authorId, input.body);
 
     const body = sanitizePeerText(input.body);
     const message = this.appendMessage(
       { ...input, body },
-      { countRound: input.type !== "system" && input.type !== "audit" },
+      { countRound: !isHuman && input.type !== "system" && input.type !== "audit" },
     );
 
     if (input.type === "artifact" && isRecord(input.payload)) {
@@ -327,6 +366,19 @@ export class Room extends DurableObject<Env> {
       }
     } else if (!isHuman) {
       this.passFloor(input.authorId, body);
+    }
+
+    if (humanChat && wantsImage(body)) {
+      await this.attachImage(body);
+    } else if (humanChat && isWorkTask(body)) {
+      this.setMeta("executedAt", "");
+      const worker = this.getMember(this.getMeta("floorHolderId")) ?? this.listMembers().find((m) => m.role === "twin");
+      if (worker) await this.executePlan(worker, body);
+    }
+
+    if (humanChat && this.getMeta("status") === "open" && !this.getMeta("pendingGate")) {
+      await this.audit("human.instruction", input.authorId, { messageId: message.id });
+      await this.ctx.storage.setAlarm(Date.now() + 40);
     }
 
     return message;
@@ -438,7 +490,7 @@ export class Room extends DurableObject<Env> {
     this.appendMessage(
       {
         authorId: "system",
-        authorName: "TwinMeet",
+        authorName: "eglu",
         type: "system",
         body: `${member.name} joined the room.`,
       },
@@ -513,7 +565,27 @@ export class Room extends DurableObject<Env> {
     await this.ctx.storage.deleteAlarm();
     await this.forwardRoomStatus("resolved");
     await this.persistMemory(summary);
+    await this.saveSuggestions(summary.narrative);
     return this.snapshot();
+  }
+
+  private async saveSuggestions(narrative: string): Promise<void> {
+    const suggestions = await suggestFollowUps({
+      apiKey: this.env.GEMINI_API_KEY,
+      model: this.env.GEMINI_MODEL || this.env.LLM_MODEL,
+      intent: this.getMeta("intent") || "",
+      narrative,
+    });
+    this.setMeta("suggestionsJson", JSON.stringify(suggestions));
+  }
+
+  private readSuggestions(): FollowUp[] {
+    try {
+      const parsed = JSON.parse(this.getMeta("suggestionsJson") || "[]") as FollowUp[];
+      return Array.isArray(parsed) ? parsed.filter((item) => item.title && item.instruction).slice(0, 4) : [];
+    } catch {
+      return [];
+    }
   }
 
   private async persistMemory(summary: JointSummary): Promise<void> {
@@ -534,6 +606,193 @@ export class Room extends DurableObject<Env> {
       embedding,
       narrative: summary.narrative,
     });
+  }
+
+  private async attachImage(request: string): Promise<void> {
+    const key = this.env.GEMINI_API_KEY;
+    const floor = this.getMember(this.getMeta("floorHolderId"));
+    const authorId = floor?.id || "system";
+    const authorName = floor?.name || "eglu";
+    if (!key) {
+      this.appendMessage(
+        {
+          authorId,
+          authorName,
+          type: "chat",
+          body: "I can't draw that map until an image key is set.",
+        },
+        { countRound: false },
+      );
+      return;
+    }
+    let narrative = "";
+    try {
+      const summary = JSON.parse(this.getMeta("summaryJson") || "null") as { narrative?: string } | null;
+      narrative = summary?.narrative || "";
+    } catch {
+      narrative = "";
+    }
+    const details = this.listArtifacts()
+      .slice(-3)
+      .map((artifact) => JSON.stringify(artifact.body).slice(0, 700))
+      .join("\n");
+    const prompt = [
+      "One illustrated map. Flat colors, labeled places, readable type, routes or days if they were planned.",
+      "No photographs of real people.",
+      `Draw this: ${request}`,
+      `Original requirements: ${this.getMeta("intent")}`,
+      narrative ? `Agreed plan: ${narrative.slice(0, 1200)}` : "",
+      details ? `Details:\n${details}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+    const image = await geminiImage(key, prompt).catch(() => null);
+    if (!image) {
+      this.appendMessage(
+        {
+          authorId,
+          authorName,
+          type: "chat",
+          body: "I couldn't draw that map just now. Ask me again in a moment.",
+        },
+        { countRound: false },
+      );
+      return;
+    }
+    this.appendMessage(
+      {
+        authorId,
+        authorName,
+        type: "chat",
+        body: "Here's a map of what you asked for.",
+        payload: { kind: "image-map", mimeType: image.mimeType, imageBase64: image.data },
+      },
+      { countRound: false },
+    );
+  }
+
+  private readResearch(): { brief: string; sources: LiveSource[] } {
+    try {
+      const parsed = JSON.parse(this.getMeta("sourcesJson") || "null") as {
+        brief?: string;
+        sources?: LiveSource[];
+      } | null;
+      return {
+        brief: parsed?.brief || "",
+        sources: Array.isArray(parsed?.sources) ? parsed.sources : [],
+      };
+    } catch {
+      return { brief: "", sources: [] };
+    }
+  }
+
+  private sourceLines(): string[] {
+    const research = this.readResearch();
+    const lines = research.sources.map((source) => `${source.title} — ${source.url}`);
+    if (research.brief) lines.unshift(research.brief.slice(0, 1500));
+    return lines;
+  }
+
+  /** A stats or planning job is not done until the bots publish the executed document. */
+  private needsExecution(): boolean {
+    if (this.getMeta("executedAt")) return false;
+    const intent = `${this.getMeta("intent") || ""}\n${this.getMeta("body") || ""}`;
+    if (/\b(sql|postgres|ddl|index)\b/i.test(intent)) return false;
+    return /\b(plan|report|stats|statistic|current|research|analy|itinerary|trip|market|latest|today|how many)\b/i.test(
+      intent,
+    );
+  }
+
+  private async executePlan(member: RoomMember, task?: string): Promise<void> {
+    const key = this.env.GEMINI_API_KEY;
+    const intent = task || this.getMeta("intent") || "";
+    const original = this.getMeta("intent") || "";
+    if (!key) {
+      this.setMeta("executedAt", String(Date.now()));
+      return;
+    }
+    const research = await geminiResearch(key, intent, this.env.GEMINI_MODEL || this.env.LLM_MODEL);
+    this.setMeta("sourcesJson", JSON.stringify(research));
+    const raw = await geminiGenerate({
+      apiKey: key,
+      model: this.env.GEMINI_MODEL || this.env.LLM_MODEL,
+      json: true,
+      temperature: 0.2,
+      maxOutputTokens: 2048,
+      system: [
+        "You execute the plan. Return JSON only:",
+        '{"title":"","summary":"","sections":[{"heading":"","details":""}],"sources":[{"title":"","url":""}]}',
+        "Every statistic must appear in the live sources. If a number is not in the sources, leave it out.",
+        "If there are no live sources, say so in the summary and do not invent percentages.",
+      ].join(" "),
+      user: [
+        `Do this now: ${intent}`,
+        original && original !== intent ? `Original chat: ${original}` : "",
+        research.brief ? `Live brief:\n${research.brief.slice(0, 4000)}` : "No live brief was returned.",
+        research.sources.length
+          ? `Sources:\n${research.sources.map((source) => `${source.title} ${source.url}`).join("\n")}`
+          : "No live sources.",
+      ].join("\n\n"),
+    }).catch(() => null);
+    const payload = parseExecutedDoc(raw, research);
+    this.appendMessage(
+      {
+        authorId: member.id,
+        authorName: member.name,
+        type: "artifact",
+        body: String(payload.title || "Executed plan"),
+        payload,
+      },
+      { countRound: false },
+    );
+    const saved = this.listMessages().at(-1);
+    if (saved) this.storeArtifact(saved, payload);
+    this.appendMessage(
+      {
+        authorId: member.id,
+        authorName: member.name,
+        type: "chat",
+        body: research.sources.length
+          ? "I carried out the plan and wrote the document from live sources. Open it to read the full piece and the links."
+          : "I wrote the document, but live search did not return sources, so it does not claim current statistics. Open it to read what is actually there.",
+      },
+      { countRound: false },
+    );
+    this.setMeta("executedAt", String(Date.now()));
+  }
+
+  /** A plan is still open until someone posts the finished deliverable. */
+  private goalStillOpen(): boolean {
+    const intent = this.getMeta("intent") || "";
+    const sql = /\b(sql|postgres|ddl|index|database|schema)\b/i.test(intent);
+    if (sql && this.listArtifacts().length > 0) return false;
+    const planning =
+      intent.length > 80 || /\b(plan|trip|itinerary|visit|visiting|days|weekend|schedule|help me)\b/i.test(intent);
+    if (!planning) return false;
+    return this.listArtifacts().length === 0;
+  }
+
+  private contextFor(member: RoomMember): TwinContext {
+    let memories: string[] = [];
+    try {
+      memories = JSON.parse(this.getMeta("memoriesJson") || "[]") as string[];
+    } catch {
+      memories = [];
+    }
+    return {
+      selfId: member.id,
+      selfName: member.name,
+      intent: this.getMeta("intent"),
+      body: this.getMeta("body"),
+      members: this.listMembers(),
+      transcript: this.listMessages(),
+      purpose: member.purpose || undefined,
+      nonGoals: member.nonGoals || undefined,
+      boundaries: member.boundaries || undefined,
+      skills: member.skills,
+      memories,
+      sources: this.sourceLines(),
+    };
   }
 
   private async maybeAdvance(): Promise<void> {
@@ -568,35 +827,20 @@ export class Room extends DurableObject<Env> {
 
     const maxRounds = Number(this.getMeta("maxRounds") || "8");
     const rounds = Number(this.getMeta("roundCount") || "0");
-    if (rounds >= maxRounds) {
-      await this.requestResolve("system", "Max rounds reached. Resolve requires human approval.");
-      return;
-    }
 
     const floorId = this.getMeta("floorHolderId");
     const member = floorId ? this.getMember(floorId) : null;
     if (!member || member.role !== "twin") return;
 
-    const memories = (() => {
-      try {
-        return JSON.parse(this.getMeta("memoriesJson") || "[]") as string[];
-      } catch {
-        return [];
-      }
-    })();
-    const ctx = {
-      selfId: member.id,
-      selfName: member.name,
-      intent: this.getMeta("intent"),
-      body: this.getMeta("body"),
-      members: this.listMembers(),
-      transcript: this.listMessages(),
-      purpose: member.purpose || undefined,
-      nonGoals: member.nonGoals || undefined,
-      boundaries: member.boundaries || undefined,
-      skills: member.skills,
-      memories,
-    };
+    if (this.needsExecution() && this.listArtifacts().length > 0) {
+      await this.executePlan(member);
+    }
+
+    const ctx = this.contextFor(member);
+    if (rounds >= maxRounds && !latestUnansweredHuman(ctx)) {
+      await this.requestResolve("system", "Max rounds reached. Resolve requires human approval.");
+      return;
+    }
     const mode = twinMode(this.env);
     let actions: TwinAction[] = [];
     try {
@@ -622,19 +866,24 @@ export class Room extends DurableObject<Env> {
       }
       throw err;
     }
+    actions = addressHumanTurn(ctx, actions);
     if (actions.length === 0) {
       this.setMeta("lastTurnAt", String(Date.now()));
       this.passFloor(member.id);
       return;
     }
 
+    let explicitHandoff = false;
+    const answeringHuman = Boolean(latestUnansweredHuman(ctx));
     for (const action of actions) {
-      if (Number(this.getMeta("roundCount") || "0") >= maxRounds) break;
+      if (!answeringHuman && Number(this.getMeta("roundCount") || "0") >= maxRounds) break;
       if (this.getMeta("pendingGate")) break;
+      const floorBefore = this.getMeta("floorHolderId");
       await this.applyAction(member, action);
+      if (this.getMeta("floorHolderId") !== floorBefore) explicitHandoff = true;
     }
 
-    if (this.getMeta("status") === "open" && !this.getMeta("pendingGate")) {
+    if (!explicitHandoff && this.getMeta("status") === "open" && !this.getMeta("pendingGate")) {
       this.passFloor(member.id);
     }
     this.setMeta("lastTurnAt", String(Date.now()));
@@ -646,6 +895,26 @@ export class Room extends DurableObject<Env> {
       return;
     }
     if (action.type === "request_resolve") {
+      const fresh = this.contextFor(member);
+      const pendingHuman = latestUnansweredHuman(fresh);
+      if (pendingHuman) {
+        const reply = scriptedHumanReply(fresh, pendingHuman);
+        this.appendMessage(
+          {
+            authorId: member.id,
+            authorName: member.name,
+            type: "chat",
+            body: reply.body,
+          },
+          { countRound: true },
+        );
+        return;
+      }
+      if (this.goalStillOpen()) return;
+      if (this.needsExecution()) {
+        await this.executePlan(member);
+        return;
+      }
       await this.requestResolve(member.id, action.body);
       return;
     }
@@ -671,6 +940,10 @@ export class Room extends DurableObject<Env> {
       return;
     }
     if (action.type === "handoff") {
+      const recentHandoffs = this.listMessages()
+        .slice(-4)
+        .filter((message) => message.type === "handoff").length;
+      if (recentHandoffs >= 2) return;
       this.appendMessage(
         {
           authorId: member.id,
@@ -679,7 +952,7 @@ export class Room extends DurableObject<Env> {
           body: action.body,
           payload: { toId: action.toId },
         },
-        { countRound: true },
+        { countRound: false },
       );
       this.setMeta("floorHolderId", action.toId);
       this.broadcast({ type: "handoff.requested", fromId: member.id, toId: action.toId });
@@ -856,6 +1129,9 @@ export class Room extends DurableObject<Env> {
       votes: this.listVotes(),
       graph: this.listEdges(),
       twinMode: twinMode(this.env),
+      sources: this.readResearch().sources,
+      liveBrief: this.readResearch().brief || undefined,
+      suggestions: this.readSuggestions(),
       createdAt: this.getMeta("createdAt"),
     };
   }
@@ -1014,6 +1290,55 @@ function geminiOptions(env: Env) {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function parseExecutedDoc(
+  raw: string | null,
+  research: { brief: string; sources: LiveSource[] },
+): Record<string, unknown> {
+  let title = "Executed plan";
+  let summary = research.brief || "Live search did not return a brief.";
+  let sections: Array<{ heading: string; details: string }> = [];
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw.replace(/^```json\s*/i, "").replace(/```$/, "")) as {
+        title?: string;
+        summary?: string;
+        sections?: Array<{ heading?: string; details?: string }>;
+      };
+      if (parsed.title) title = parsed.title;
+      if (parsed.summary) summary = parsed.summary;
+      if (Array.isArray(parsed.sections)) {
+        sections = parsed.sections
+          .filter((section) => section.heading || section.details)
+          .map((section) => ({
+            heading: String(section.heading || "Section"),
+            details: String(section.details || ""),
+          }));
+      }
+    } catch {
+      summary = raw.slice(0, 2000);
+    }
+  }
+  if (!sections.length && research.brief) {
+    sections = [{ heading: "What the live search returned", details: research.brief }];
+  }
+  return {
+    kind: "report",
+    title,
+    summary,
+    sections,
+    sources: research.sources,
+    live: research.sources.length > 0,
+  };
+}
+
+function isWorkTask(text: string): boolean {
+  return /\b(write|draft|checklist|brief|document|schedule|shot list|research|search live|sourced)\b/i.test(text);
+}
+
+function wantsImage(text: string): boolean {
+  return /\b(image|picture|photo|map|diagram|draw|sketch|illustrat|poster)\b/i.test(text);
 }
 
 function mentionTarget(body: string): string | null {

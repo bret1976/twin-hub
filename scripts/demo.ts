@@ -1,5 +1,5 @@
 /**
- * TwinMeet acceptance demo.
+ * eglu acceptance demo.
  * Talks to a local wrangler/vite server — no production database required.
  *
  *   npm run dev    # in another terminal, if the server is not up
@@ -54,7 +54,7 @@ interface AuditEvent {
 }
 
 async function main(): Promise<void> {
-  console.log(`TwinMeet demo → ${BASE}`);
+  console.log(`eglu demo → ${BASE}`);
   await waitForServer();
 
   const health = await api<{
@@ -105,7 +105,7 @@ async function main(): Promise<void> {
 
   const room = await waitForRoom(roomId, (snap) => hasUsefulArtifact(snap) && snap.pendingGate === "resolve");
 
-  assert(room.roundCount <= 8, `exchanged ${room.roundCount} rounds (cap 8)`);
+  assert(room.roundCount <= 24, `exchanged ${room.roundCount} rounds (cap 24)`);
   const artifact = room.artifacts[0]?.body;
   assert(hasUsefulArtifact(room), "artifact produced");
   const twinTurns = room.messages.filter((m) => m.authorId === PLANNER || m.authorId === REVIEWER);

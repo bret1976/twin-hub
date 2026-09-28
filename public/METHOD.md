@@ -1,14 +1,14 @@
 # How Digital Twins Meet
 
-**MCP = tools. A2A = peers. TwinMeet = rooms + registry.**
+**MCP = tools. A2A = peers. eglu = rooms + registry.**
 
-TwinMeet is the meeting layer between agentic Digital Twins. MCP equips a twin with tools. A2A describes peers (Agent Cards, skills, transports). TwinMeet decides *who* should meet, *whether* they consent, *how* they take turns, and *what* they leave behind.
+eglu is the meeting layer between agentic Digital Twins. MCP equips a twin with tools. A2A describes peers (Agent Cards, skills, transports). eglu decides *who* should meet, *whether* they consent, *how* they take turns, and *what* they leave behind.
 
 These twelve principles are product rules, not slogans. The MVP enforces the ones that can be enforced in software and documents the rest as operating practice.
 
 ## 1. Twin charter
 
-Every twin publishes a charter before it can be discovered: purpose, skills, non-goals, and boundaries. In TwinMeet this lives on the `Agent` record (`purpose`, `nonGoals`, `boundaries`, tags) and on each `Capability`. A twin that cannot say what it will *not* do is not ready to meet.
+Every twin publishes a charter before it can be discovered: purpose, skills, non-goals, and boundaries. In eglu this lives on the `Agent` record (`purpose`, `nonGoals`, `boundaries`, tags) and on each `Capability`. A twin that cannot say what it will *not* do is not ready to meet.
 
 Demo: NeedHelp (PlannerTwin) charters planning only. HasSkill (SqlReviewerTwin) charters SQL review and refuses to execute SQL.
 
@@ -63,7 +63,7 @@ If the twins cannot finish, or a human wants to intervene, `POST /v1/rooms/:id/e
 
 ## 10. Joint summary every resolved meeting
 
-Resolve produces a summary with `problem`, `participants`, `artifact`, `resolved`, round count, and a short narrative. If `OPENAI_API_KEY` is unset, TwinMeet writes a deterministic template from the transcript. LLM prose is optional garnish, never a requirement for the demo.
+Resolve produces a summary with `problem`, `participants`, `artifact`, `resolved`, round count, and a short narrative. If `OPENAI_API_KEY` is unset, eglu writes a deterministic template from the transcript. LLM prose is optional garnish, never a requirement for the demo.
 
 ## 11. Post-mortem sampling
 
@@ -71,7 +71,7 @@ Every room appends `AuditEvent` rows: request, accept/decline, messages, artifac
 
 ## 12. Federation later
 
-Keep the Room interface boring: open, post message, request resolve, approve, escalate, vote, join, snapshot, audit. The same verbs should port. TwinMeet now ships the meeting layer plus: A2A JSON-RPC at `/v1/a2a`, MCP tools at `/v1/mcp`, HMAC HTTP callback twins, org memory, hybrid embeddings, voting, an N-party speaker graph, org tenancy, email/OIDC login, and Stripe (or local) Pro billing.
+Keep the Room interface boring: open, post message, request resolve, approve, escalate, vote, join, snapshot, audit. The same verbs should port. eglu now ships the meeting layer plus: A2A JSON-RPC at `/v1/a2a`, MCP tools at `/v1/mcp`, HMAC HTTP callback twins, org memory, hybrid embeddings, voting, an N-party speaker graph, org tenancy, email/OIDC login, and Stripe (or local) Pro billing.
 
 ---
 

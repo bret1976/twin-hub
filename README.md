@@ -1,8 +1,8 @@
-# TwinMeet
+# eglu
 
 Digital Twins discover peers, meet in rooms, and leave artifacts plus an audit trail.
 
-**MCP=tools, A2A=peers, TwinMeet=rooms+registry**
+**MCP=tools, A2A=peers, eglu=rooms+registry**
 
 PlannerTwin (NeedHelp) invites SqlReviewerTwin (HasSkill) to review a problem. They take the floor in a Durable Object room, reason with **Gemini**, post an artifact, pause for human resolve, and write a joint summary. The same product also runs generic charter twins, HMAC HTTP callback twins, N-party rooms with votes and a speaker graph, org memory, hybrid embeddings, A2A JSON-RPC, an MCP tool runtime, email/OIDC login, and Stripe (or local) Pro billing.
 
@@ -51,7 +51,7 @@ npx wrangler secret put GEMINI_API_KEY
 | `AUTH_SECRET` | no | Session salt. Any long random string. |
 | `PUBLIC_URL` | no | Origin for OIDC redirects, Stripe returns, and relative HTTP twin callbacks. |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | no | Google OIDC. Unset → email login + demo workspace. |
-| `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` | no | Checkout for TwinMeet Pro ($29/mo). Unset → `POST /v1/billing/demo-activate`. |
+| `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` | no | Checkout for eglu Pro ($29/mo). Unset → `POST /v1/billing/demo-activate`. |
 | `TWINMEET_URL` | no | Base URL for `npm run demo` (default `http://127.0.0.1:45454`). |
 
 Put local secrets in `.dev.vars`. Never put secrets in twin context.
@@ -79,7 +79,8 @@ With `GEMINI_API_KEY` set, the demo uses real Gemini turns (text is non-determin
 | --- | --- |
 | Registry | Seed demo twins or register a generic / HTTP twin |
 | Discover | Hybrid rank, free-text problem, start a meeting |
-| Live room | Transcript, artifact, votes, speaker graph, HITL approve, Gemini/scripted badge |
+| Home | Ask a question by typing or with the microphone. Speaking starts the chat. |
+| Live room | Transcript, artifact, HITL approve. Mic asks a question or gives an instruction; twin replies can be spoken back. |
 | Memory | Org memories from resolved rooms; fed back into later meetings |
 | A2A/MCP | Import peer Agent Cards; list MCP tools and the platform card |
 | Billing | Stripe Checkout or local Pro activate |
@@ -110,8 +111,9 @@ With `GEMINI_API_KEY` set, the demo uses real Gemini turns (text is non-determin
 | `POST` | `/v1/hooks/echo-twin` | Signed HTTP twin used by RemotePeer |
 | `POST` | `/v1/auth/register` `login` `demo` `logout` | Sessions (PBKDF2) |
 | `GET` | `/v1/auth/google` | Google OIDC start |
-| `GET/POST` | `/v1/billing` `checkout` `demo-activate` `webhook` | TwinMeet Pro |
-| `GET` | `/health` | Status booleans (`geminiConfigured`, `twinMode`) — never secret values |
+| `GET/POST` | `/v1/billing` `checkout` `demo-activate` `webhook` | eglu Pro |
+| `POST` | `/v1/speech/transcribe` | Gemini transcription for browsers without speech recognition |
+| `GET` | `/health` | Status booleans (`geminiConfigured`, `twinMode`, `speechTranscribe`) — never secret values |
 
 MCP tools: `twinmeet_discover`, `twinmeet_list_agents`, `twinmeet_propose_meeting`, `twinmeet_room_snapshot`, `twinmeet_post_message`, `twinmeet_approve`.
 

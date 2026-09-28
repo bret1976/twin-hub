@@ -50,5 +50,10 @@ export function withCors(response: Response, requestOrigin?: string | null): Res
   for (const [k, v] of Object.entries(corsHeaders(requestOrigin))) {
     headers.set(k, v);
   }
-  return new Response(response.body, { status: response.status, headers });
+  // Rebuilding the response drops a WebSocket upgrade unless the socket is copied.
+  const webSocket = (response as Response & { webSocket?: WebSocket | null }).webSocket;
+  if (webSocket) {
+    return new Response(null, { status: 101, headers, webSocket });
+  }
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }

@@ -100,6 +100,9 @@ export interface RoomSnapshot {
   votes?: VoteRecord[];
   graph?: GraphEdge[];
   twinMode?: "gemini" | "scripted";
+  sources?: Array<{ title: string; url: string }>;
+  liveBrief?: string;
+  suggestions?: Array<{ title: string; instruction: string }>;
   createdAt: string;
 }
 
@@ -153,6 +156,7 @@ export interface Health {
   mcp?: boolean;
   oidc?: boolean;
   stripe?: boolean;
+  speechTranscribe?: boolean;
 }
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
@@ -282,6 +286,11 @@ export const api = {
     req<{ peer: FederatedPeer }>("/v1/peers", { method: "POST", body: JSON.stringify({ cardUrl }) }),
   a2aCard: () => req<Record<string, unknown>>("/.well-known/agent-card.json"),
   mcpTools: () => req<{ tools: Array<{ name: string; description: string }> }>("/v1/mcp"),
+  transcribe: (audioBase64: string, mimeType: string) =>
+    req<{ text: string }>("/v1/speech/transcribe", {
+      method: "POST",
+      body: JSON.stringify({ audioBase64, mimeType }),
+    }),
 };
 
 function encodeURIContent(q: string): string {

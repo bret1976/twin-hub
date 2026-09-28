@@ -14,8 +14,8 @@ interface JsonRpc {
 
 export function platformCard(origin: string): A2AAgentCard {
   return {
-    name: "TwinMeet",
-    description: "Rooms + registry for Digital Twins. MCP=tools, A2A=peers, TwinMeet=rooms+registry.",
+    name: "eglu",
+    description: "Rooms + registry for Digital Twins. MCP=tools, A2A=peers, eglu=rooms+registry.",
     supportedInterfaces: [
       {
         url: `${origin}/v1/a2a`,
@@ -28,7 +28,7 @@ export function platformCard(origin: string): A2AAgentCard {
         protocolVersion: "2025-03-26",
       },
     ],
-    provider: { organization: "TwinMeet", url: origin },
+    provider: { organization: "eglu", url: origin },
     version: "1.0.0",
     documentationUrl: `${origin}/METHOD.md`,
     capabilities: {

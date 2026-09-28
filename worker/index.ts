@@ -2,7 +2,7 @@ import { toAgentCard, toPublicAgent } from "./lib/card";
 import { error, json, parseTags, readJson, withCors, nowIso } from "./lib/http";
 import { clearSessionCookie, readSessionId, sessionCookie } from "./lib/auth";
 import { embedText } from "./lib/embeddings";
-import { geminiGenerate, twinMode } from "./lib/gemini";
+import { GeminiHttpError, geminiGenerate, geminiTranscribe, twinMode } from "./lib/gemini";
 import { handleA2A, platformCard } from "./lib/a2a";
 import { handleMcp } from "./lib/mcp";
 import { handleEchoTwin } from "./lib/hooks";
@@ -12,6 +12,8 @@ import { Room } from "./durable-objects/room";
 import {
   DEMO_INTENT,
   DEMO_ORG_ID,
+  PARTNER_ID,
+  REVIEWER_ID,
   SAMPLE_ORDERS_DDL,
   type AgentRecord,
   type Env,
@@ -136,8 +138,13 @@ async function route(request: Request, env: Env): Promise<Response> {
       mcp: true,
       oidc: Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET),
       stripe: Boolean(env.STRIPE_SECRET_KEY),
+      speechTranscribe: Boolean(env.GEMINI_API_KEY),
       auth: true,
     });
+  }
+
+  if (request.method === "POST" && path === "/v1/speech/transcribe") {
+    return transcribeSpeech(request, env);
   }
 
   if (request.method === "GET" && (path === "/.well-known/agent.json" || path === "/.well-known/agent-card.json")) {
@@ -354,9 +361,18 @@ async function route(request: Request, env: Env): Promise<Response> {
     let inviteeId: string | undefined = body.inviteeId;
     const startTags = body.tags ?? [];
     if (!inviteeId) {
-      const embedding = env.GEMINI_API_KEY ? await embedText(env.GEMINI_API_KEY, body.intent) : null;
-      const results = await registry.discover(body.intent, startTags, embedding, orgId);
-      inviteeId = results.find((h) => h.agent.id !== requesterId)?.agent.id;
+      const aboutSql = /\b(sql|postgres|ddl|index|database|schema|table)\b/i.test(
+        `${body.intent}\n${body.body || ""}\n${startTags.join(" ")}`,
+      );
+      if (aboutSql) {
+        inviteeId = REVIEWER_ID;
+      } else if (requesterId !== PARTNER_ID) {
+        inviteeId = PARTNER_ID;
+      } else {
+        const embedding = env.GEMINI_API_KEY ? await embedText(env.GEMINI_API_KEY, body.intent) : null;
+        const results = await registry.discover(body.intent, startTags, embedding, orgId);
+        inviteeId = results.find((h) => h.agent.id !== requesterId)?.agent.id;
+      }
     }
     if (!inviteeId) return error(404, "No peer found for this intent");
     await assertCanOpenRoom(registry, orgId);
@@ -631,7 +647,7 @@ async function routeBilling(
       org,
       plan: org?.plan ?? "free",
       stripeConfigured: Boolean(env.STRIPE_SECRET_KEY),
-      price: { amount: 2900, currency: "usd", interval: "month", name: "TwinMeet Pro" },
+      price: { amount: 2900, currency: "usd", interval: "month", name: "eglu Pro" },
     });
   }
 
@@ -756,7 +772,7 @@ async function openRoom(
     meetingRequestId: meeting.id,
     intent: meeting.intent,
     body: meeting.body,
-    maxRounds: 8,
+    maxRounds: 24,
     members,
     floorHolderId: meeting.requesterId,
     publicBase: origin,
@@ -802,6 +818,43 @@ async function expandIntentTags(env: Env, intent: string): Promise<string[]> {
   }
 }
 
+async function transcribeSpeech(request: Request, env: Env): Promise<Response> {
+  if (!env.GEMINI_API_KEY) {
+    return error(
+      503,
+      "Voice transcription needs GEMINI_API_KEY. Chrome and Safari can use the microphone without it.",
+    );
+  }
+  const body = await readJson<{ audioBase64?: string; mimeType?: string }>(request);
+  const audio = (body.audioBase64 || "").replace(/^data:[^;]+;base64,/, "").replace(/\s/g, "");
+  if (!audio) return error(400, "audioBase64 is required");
+  if (audio.length > 4_500_000) return error(413, "Recording is too long. Speak a shorter question.");
+  const mime = audioMime(body.mimeType);
+  if (!mime) return error(400, "Unsupported audio type");
+  try {
+    const text = await geminiTranscribe(env.GEMINI_API_KEY, audio, mime, env.GEMINI_MODEL || env.LLM_MODEL);
+    if (text == null) return error(502, "Could not transcribe that recording.");
+    return json({ text });
+  } catch (err) {
+    if (err instanceof GeminiHttpError && err.status === 401) return error(401, "Gemini rejected the API key");
+    if (err instanceof GeminiHttpError && err.status === 429) {
+      return error(429, "Gemini is rate-limiting transcription. Try again in a moment.");
+    }
+    throw err;
+  }
+}
+
+function audioMime(input?: string): string | null {
+  const raw = (input || "audio/webm").split(";")[0].trim().toLowerCase();
+  if (raw === "audio/wave" || raw === "audio/x-wav") return "audio/wav";
+  if (raw === "audio/mp3") return "audio/mpeg";
+  if (raw === "audio/m4a" || raw === "audio/x-m4a") return "audio/mp4";
+  if (raw === "audio/webm" || raw === "audio/wav" || raw === "audio/mpeg" || raw === "audio/mp4" || raw === "audio/ogg" || raw === "audio/aac") {
+    return raw;
+  }
+  return null;
+}
+
 function match(path: string, re: RegExp): RegExpMatchArray | null {
   return path.match(re);
 }
@@ -814,12 +867,12 @@ async function assertCanCreateAgent(registry: DurableObjectStub<Registry>, orgId
   const org = await registry.getOrg(orgId);
   if (!org || org.plan === "pro") return;
   const n = await registry.countOrgAgents(orgId);
-  if (n >= 8) throw new Error("Free plan limit reached. Upgrade to TwinMeet Pro.");
+  if (n >= 8) throw new Error("Free plan limit reached. Upgrade to eglu Pro.");
 }
 
 async function assertCanOpenRoom(registry: DurableObjectStub<Registry>, orgId: string): Promise<void> {
   const org = await registry.getOrg(orgId);
   if (!org || org.plan === "pro") return;
   const n = await registry.countOpenRooms(orgId);
-  if (n >= 3) throw new Error("Free plan limit reached. Upgrade to TwinMeet Pro.");
+  if (n >= 3) throw new Error("Free plan limit reached. Upgrade to eglu Pro.");
 }

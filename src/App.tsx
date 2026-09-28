@@ -4,6 +4,7 @@ import { BillingPage } from "@/pages/BillingPage";
 import { DiscoverPage } from "@/pages/DiscoverPage";
 import { FederationPage } from "@/pages/FederationPage";
 import { HomePage } from "@/pages/HomePage";
+import { LandingPage } from "@/pages/LandingPage";
 import { MeetingsPage } from "@/pages/MeetingsPage";
 import { MemoryPage } from "@/pages/MemoryPage";
 import { RegistryPage } from "@/pages/RegistryPage";
@@ -13,6 +14,7 @@ import { api, type Health } from "@/lib/api";
 import { clearStoredSession, getStoredSessionId, type SessionOrg, type SessionUser } from "@/lib/session";
 
 type Route =
+  | "landing"
   | "home"
   | "registry"
   | "discover"
@@ -26,6 +28,8 @@ type Route =
 
 function parseHash(): { route: Route; roomId: string | null } {
   const raw = window.location.hash.replace(/^#\/?/, "");
+  if (!raw) return { route: "landing", roomId: null };
+  if (raw === "chat") return { route: "home", roomId: null };
   if (raw.startsWith("rooms/")) return { route: "room", roomId: raw.slice("rooms/".length) };
   if (raw === "discover") return { route: "discover", roomId: null };
   if (raw === "meetings") return { route: "meetings", roomId: null };
@@ -80,24 +84,31 @@ export default function App() {
       window.location.hash = `#/rooms/${id}`;
       return;
     }
-    window.location.hash = next === "home" ? "#" : `#/${next}`;
+    window.location.hash = next === "home" ? "#/chat" : next === "landing" ? "#" : `#/${next}`;
   }
 
-  const chatMode = route === "room";
+  if (route === "landing") {
+    return <LandingPage onEnter={() => go("home")} />;
+  }
+
+  const chatMode = route === "home" || route === "room";
 
   return (
     <div className="min-h-screen bg-ink">
-      <header className="border-b border-rule/80">
-        <div className="mx-auto flex h-[4.5rem] max-w-2xl items-center justify-between px-4">
-          <button type="button" onClick={() => go("home")} className="text-left">
-            <p className="text-base font-medium tracking-tight">TwinMeet</p>
-            <p className="text-[11px] text-muted">
-              {health.twinMode === "gemini" || (health.gemini && health.twinMode !== "scripted")
-                ? "Two Gemini bots. One chat."
-                : "Two bots. One chat."}
+      <header className="border-b border-rule/80 pt-[env(safe-area-inset-top)]">
+        <div className="mx-auto flex h-16 max-w-2xl items-center justify-between gap-2 px-3 sm:h-20 sm:px-4">
+          <button type="button" onClick={() => go("landing")} className="min-w-0 text-left" aria-label="eglu home">
+            <p
+              className="text-3xl font-semibold leading-none tracking-tight text-white sm:text-4xl"
+              style={{
+                textShadow:
+                  "0 0 8px rgba(120, 255, 245, 0.95), 0 0 18px rgba(0, 230, 220, 0.75), 0 0 36px rgba(0, 190, 200, 0.45)",
+              }}
+            >
+              eglu
             </p>
           </button>
-          <div className="relative flex items-center gap-3">
+          <div className="relative flex shrink-0 items-center gap-2 sm:gap-3">
             {route === "room" && (
               <button type="button" onClick={() => go("home")} className="text-sm text-teal">
                 New chat
@@ -146,10 +157,8 @@ export default function App() {
         </div>
       </header>
 
-      <main className={chatMode ? "" : "mx-auto max-w-6xl px-4 py-8"}>
-        {route === "home" && (
-          <HomePage onOpened={(id) => go("room", id)} onDiscover={() => go("discover")} />
-        )}
+      <main className={chatMode ? "" : "mx-auto max-w-2xl px-4 py-8"}>
+        {route === "home" && <HomePage onOpened={(id) => go("room", id)} onFindTwin={() => go("discover")} />}
         {route === "registry" && <RegistryPage />}
         {route === "discover" && <DiscoverPage onOpened={(id) => go("room", id)} />}
         {route === "meetings" && <MeetingsPage onOpened={(id) => go("room", id)} />}

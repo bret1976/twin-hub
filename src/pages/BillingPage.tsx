@@ -58,7 +58,7 @@ export function BillingPage({ org, onOrg }: { org: SessionOrg | null; onOrg: (or
       <div>
         <h1 className="font-serif text-3xl">Billing</h1>
         <p className="mt-1 text-sm text-muted">
-          TwinMeet Pro is $29/month via Stripe Checkout. This host {stripe ? "has a Stripe key." : "does not have STRIPE_SECRET_KEY, so Checkout cannot charge a card."}
+          eglu Pro is $29/month via Stripe Checkout. This host {stripe ? "has a Stripe key." : "does not have STRIPE_SECRET_KEY, so Checkout cannot charge a card."}
         </p>
       </div>
       {error && <p className="text-sm text-coral">{error}</p>}
@@ -74,7 +74,7 @@ export function BillingPage({ org, onOrg }: { org: SessionOrg | null; onOrg: (or
         </Card>
         <Card>
           <CardHeader>
-            <CardTitle>TwinMeet Pro</CardTitle>
+            <CardTitle>eglu Pro</CardTitle>
             <CardDescription>$29 / month — unlimited twins, rooms, memory, and federation.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">

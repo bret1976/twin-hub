@@ -64,7 +64,7 @@ export function RegistryPage() {
           <h1 className="font-serif text-3xl">Agent registry</h1>
           <p className="mt-1 max-w-2xl text-sm text-muted">
             Digital Twins publish a charter and A2A-shaped Agent Card. Discovery matches intent to
-            skills — MCP equips an agent; TwinMeet seats them in a room.
+            skills — MCP equips an agent; eglu seats them in a room.
           </p>
         </div>
         <Button onClick={() => void seed()} disabled={busy}>

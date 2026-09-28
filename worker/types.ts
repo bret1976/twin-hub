@@ -152,6 +152,9 @@ export interface RoomSnapshot {
   votes: VoteRecord[];
   graph: GraphEdge[];
   twinMode?: "gemini" | "scripted";
+  sources?: Array<{ title: string; url: string }>;
+  liveBrief?: string;
+  suggestions?: Array<{ title: string; instruction: string }>;
   createdAt: string;
 }
 
@@ -237,6 +240,7 @@ export interface TwinContext {
   boundaries?: string;
   skills?: string[];
   memories?: string[];
+  sources?: string[];
 }
 
 export type TwinAction =
@@ -311,6 +315,7 @@ export const DEMO_INTENT = "Review this toy DDL for a orders table and suggest o
 
 export const PLANNER_ID = "planner-twin";
 export const REVIEWER_ID = "sql-reviewer-twin";
+export const PARTNER_ID = "partner-twin";
 export const COMPLIANCE_ID = "compliance-twin";
 export const CALLBACK_ID = "callback-twin";
 export const DEMO_ORG_ID = "org_demo";

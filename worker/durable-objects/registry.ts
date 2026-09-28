@@ -6,6 +6,7 @@ import {
   COMPLIANCE_ID,
   DEMO_INTENT,
   DEMO_ORG_ID,
+  PARTNER_ID,
   PLANNER_ID,
   REVIEWER_ID,
   SAMPLE_ORDERS_DDL,
@@ -237,10 +238,10 @@ export class Registry extends DurableObject<Env> {
       PLANNER_ID,
       DEMO_ORG_ID,
       "NeedHelp",
-      "PlannerTwin — frames problems and invites a specialist when a skill is missing.",
-      "Turn a messy request into a scoped meeting with a capable peer.",
-      "Does not write SQL, touch production data, or invent credentials.",
-      "May only invite; may not execute tools on the peer's behalf. No secrets in context.",
+      "PlannerTwin — works a request out loud with the other bot until it is actually solved.",
+      "Keep talking until the human's goal is answered with specifics. A trip needs days, places, and an order. Do not stop after a greeting.",
+      "Does not invent credentials, run SQL, or change the subject to databases unless the human asked.",
+      "Stay on the human's words. No secrets in context.",
       JSON.stringify(["planning"]),
       "0.1.0",
       "scripted",
@@ -267,10 +268,28 @@ export class Registry extends DurableObject<Env> {
       ts,
     );
     this.ctx.storage.sql.exec(
+      `INSERT OR REPLACE INTO agents
+        (id, org_id, name, description, purpose, non_goals, boundaries, tags_json, version, runtime, script, callback_url, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+      PARTNER_ID,
+      DEMO_ORG_ID,
+      "GoesWith",
+      "The other bot. Builds the plan with NeedHelp until the request is finished.",
+      "Add the next concrete piece of the answer every turn: a day, a place, a time, a reason. Do not quit early.",
+      "Does not switch the topic to SQL or databases unless the human asked for that.",
+      "Stay on the spoken request. No secrets.",
+      JSON.stringify(["planning", "travel", "general"]),
+      "0.1.0",
+      "generic",
+      "generic",
+      ts,
+      ts,
+    );
+    this.ctx.storage.sql.exec(
       `INSERT OR REPLACE INTO orgs (id, name, plan, stripe_customer_id, stripe_subscription_id, created_at)
        VALUES (?, ?, 'pro', NULL, NULL, ?)`,
       DEMO_ORG_ID,
-      "TwinMeet Demo",
+      "eglu Demo",
       ts,
     );
     this.ctx.storage.sql.exec(
@@ -299,9 +318,9 @@ export class Registry extends DurableObject<Env> {
       DEMO_ORG_ID,
       "RemotePeer",
       "HTTP callback twin used to prove remote A2A/callback collaboration.",
-      "Respond to TwinMeet floor grants over HMAC-signed HTTP.",
+      "Respond to eglu floor grants over HMAC-signed HTTP.",
       "Does not hold org secrets.",
-      "Only accepts signed TwinMeet callbacks.",
+      "Only accepts signed eglu callbacks.",
       JSON.stringify(["remote", "http", "federation"]),
       "0.1.0",
       "http",
@@ -335,7 +354,7 @@ export class Registry extends DurableObject<Env> {
       agentId: CALLBACK_ID,
       skillId: "http-callback",
       name: "Remote floor response",
-      description: "Answer a signed TwinMeet callback with chat or vote actions.",
+      description: "Answer a signed eglu callback with chat or vote actions.",
       tags: ["remote", "http"],
       examples: ["HMAC callback from a room floor grant."],
     });

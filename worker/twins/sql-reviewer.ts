@@ -1,11 +1,14 @@
 import type { TwinAction, TwinContext } from "../types";
 import { SAMPLE_ORDERS_DDL } from "../types";
 import { sanitizePeerText } from "../lib/sanitize";
+import { latestUnansweredHuman, scriptedHumanReply } from "./human";
 
 const INDEX_SQL =
   "CREATE INDEX idx_orders_customer_created ON orders (customer_id, created_at);";
 
 export function sqlReviewerAct(ctx: TwinContext): TwinAction[] {
+  const human = latestUnansweredHuman(ctx);
+  if (human) return [scriptedHumanReply(ctx, human)];
   const mine = ctx.transcript.filter((m) => m.authorId === ctx.selfId);
   const peerText = ctx.transcript
     .filter((m) => m.authorId !== ctx.selfId)

@@ -20,7 +20,7 @@ export function AccountPage({
   const [email, setEmail] = useState("demo@twinmeet.dev");
   const [password, setPassword] = useState("demo-pass");
   const [name, setName] = useState("Demo Owner");
-  const [orgName, setOrgName] = useState("TwinMeet Demo");
+  const [orgName, setOrgName] = useState("eglu Demo");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
