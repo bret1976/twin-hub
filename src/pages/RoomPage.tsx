@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Input, Textarea } from "@/components/ui/input";
-import { api, type Health, type RoomMessage, type RoomMinutes, type RoomSnapshot } from "@/lib/api";
+import { Textarea } from "@/components/ui/input";
+import { api, type Health, type RoomMessage, type RoomSnapshot } from "@/lib/api";
 
 export function RoomPage({ roomId, onHome }: { roomId: string; onHome?: () => void }) {
   const [room, setRoom] = useState<RoomSnapshot | null>(null);
@@ -9,10 +9,6 @@ export function RoomPage({ roomId, onHome }: { roomId: string; onHome?: () => vo
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [health, setHealth] = useState<Health | null>(null);
-  const [filter, setFilter] = useState("");
-  const [minutes, setMinutes] = useState<RoomMinutes | null>(null);
-  const [minutesOpen, setMinutesOpen] = useState(false);
-  const [minutesBusy, setMinutesBusy] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
 
   async function refresh() {
@@ -80,44 +76,12 @@ export function RoomPage({ roomId, onHome }: { roomId: string; onHome?: () => vo
     }
   }
 
-  async function loadMinutes() {
-    setMinutesBusy(true);
-    setError(null);
-    try {
-      const res = await api.roomMinutes(roomId);
-      setMinutes(res.minutes);
-      setMinutesOpen(true);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Minutes failed");
-    } finally {
-      setMinutesBusy(false);
-    }
-  }
-
-  function downloadMinutes(format: "md" | "json" | "txt") {
-    const a = document.createElement("a");
-    a.href = api.roomMinutesExportUrl(roomId, format);
-    a.download = "";
-    a.rel = "noopener";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-  }
-
   if (!room && error) return <p className="px-4 text-coral">{error}</p>;
   if (!room) {
     return <p className="px-4 pt-16 text-center text-muted">The bots are sitting down…</p>;
   }
 
-  const needle = filter.trim().toLowerCase();
-  const visible = room.messages.filter((m) => {
-    if (m.type === "audit") return false;
-    if (!needle) return true;
-    return (
-      m.body.toLowerCase().includes(needle) ||
-      m.authorName.toLowerCase().includes(needle)
-    );
-  });
+  const visible = room.messages.filter((m) => m.type !== "audit");
   const gemini = (room.twinMode ?? health?.twinMode) !== "scripted";
 
   return (
@@ -128,72 +92,12 @@ export function RoomPage({ roomId, onHome }: { roomId: string; onHome?: () => vo
           <p className="mt-1 text-xs text-muted">
             {twins.map((t) => t.name).join("  ·  ") || "Two twins"}
             {gemini ? "  ·  Gemini" : "  ·  practice mode"}
-            {health?.transcriptSearch ? "  ·  search on" : ""}{health?.roomMinutes ? "  ·  minutes on" : ""}
           </p>
         </div>
-        <div className="flex shrink-0 items-center gap-3">
-          <button
-            type="button"
-            className="text-xs text-muted hover:text-paper"
-            disabled={minutesBusy}
-            onClick={() => void loadMinutes()}
-          >
-            {minutesBusy ? "Minutes…" : "Minutes"}
-          </button>
-          <button type="button" className="text-xs text-muted hover:text-paper" onClick={onHome}>
-            New chat
-          </button>
-        </div>
+        <button type="button" className="text-xs text-muted hover:text-paper" onClick={onHome}>
+          New chat
+        </button>
       </header>
-
-      <div className="mb-3">
-        <Input
-          placeholder="Filter this room’s transcript…"
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-        />
-        {needle && (
-          <p className="mt-1 text-xs text-muted">
-            Showing {visible.length} of {room.messages.filter((m) => m.type !== "audit").length} messages
-          </p>
-        )}
-      </div>
-
-      {minutesOpen && minutes && (
-        <div className="mb-3 max-h-56 overflow-y-auto rounded-2xl border border-teal/30 bg-teal/10 px-4 py-3 text-sm text-paper-2">
-          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-            <p className="text-xs font-medium uppercase tracking-wide text-teal">Room minutes</p>
-            <div className="flex flex-wrap gap-2">
-              <button type="button" className="text-xs text-teal hover:underline" onClick={() => downloadMinutes("md")}>
-                Download .md
-              </button>
-              <button type="button" className="text-xs text-teal hover:underline" onClick={() => downloadMinutes("json")}>
-                .json
-              </button>
-              <button type="button" className="text-xs text-teal hover:underline" onClick={() => downloadMinutes("txt")}>
-                .txt
-              </button>
-              <button type="button" className="text-xs text-muted hover:text-paper" onClick={() => setMinutesOpen(false)}>
-                Close
-              </button>
-            </div>
-          </div>
-          <p className="mb-2 text-xs text-muted">
-            {minutes.decisions.length} decisions · {minutes.actionItems.length} actions · {minutes.results.length} results · {minutes.messageCount} messages
-          </p>
-          <p className="mb-2 leading-relaxed">{minutes.overview}</p>
-          {minutes.decisions.slice(0, 4).map((d) => (
-            <p key={d.messageId + d.text.slice(0, 24)} className="text-xs text-paper-2">
-              • {d.text}
-            </p>
-          ))}
-          {minutes.actionItems.slice(0, 4).map((d) => (
-            <p key={d.messageId + d.text.slice(0, 24)} className="text-xs text-gold">
-              → {d.text}
-            </p>
-          ))}
-        </div>
-      )}
 
       <div ref={logRef} className="min-h-0 flex-1 space-y-5 overflow-y-auto pb-4">
         {visible.length === 0 && (

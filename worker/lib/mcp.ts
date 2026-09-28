@@ -4,7 +4,6 @@ import { DEMO_ORG_ID } from "../types";
 import { toPublicAgent } from "./card";
 import { embedText } from "./embeddings";
 import { json, parseTags, readJson } from "./http";
-import { exportMinutes } from "./minutes";
 
 interface JsonRpc {
   jsonrpc?: string;
@@ -52,31 +51,6 @@ const TOOLS = [
     inputSchema: {
       type: "object",
       properties: { roomId: { type: "string" } },
-      required: ["roomId"],
-    },
-  },
-  {
-    name: "twinmeet_transcript_search",
-    description: "Search room transcripts by keyword (per-room or org-wide).",
-    inputSchema: {
-      type: "object",
-      properties: {
-        q: { type: "string" },
-        roomId: { type: "string", description: "Optional room id; omit to search across org rooms" },
-        limit: { type: "number" },
-      },
-      required: ["q"],
-    },
-  },
-  {
-    name: "twinmeet_room_minutes",
-    description: "Build structured meeting minutes from a room transcript (decisions, actions, exportable markdown).",
-    inputSchema: {
-      type: "object",
-      properties: {
-        roomId: { type: "string" },
-        format: { type: "string", enum: ["json", "md", "txt"], description: "Optional export format; default json object" },
-      },
       required: ["roomId"],
     },
   },
@@ -214,47 +188,6 @@ async function callTool(
     const roomId = String(args.roomId ?? "");
     const stub = env.ROOM.getByName(roomId) as unknown as { getSnapshot(): Promise<unknown> };
     return JSON.stringify(await stub.getSnapshot(), null, 2);
-  }
-  if (name === "twinmeet_room_minutes") {
-    const roomId = String(args.roomId ?? "").trim();
-    if (!roomId) throw new Error("roomId is required");
-    const format = String(args.format ?? "json").toLowerCase();
-    const stub = env.ROOM.getByName(roomId) as unknown as { getMinutes(): Promise<import("./minutes").RoomMinutes> };
-    const minutes = await stub.getMinutes();
-    if (format === "md" || format === "txt") {
-      return exportMinutes(minutes, format).body;
-    }
-    return JSON.stringify(minutes, null, 2);
-  }
-  if (name === "twinmeet_transcript_search") {
-    const q = String(args.q ?? "").trim();
-    const limit = Number(args.limit ?? 40);
-    const roomId = typeof args.roomId === "string" ? args.roomId.trim() : "";
-    type SearchStub = {
-      searchTranscript(
-        query: string,
-        limit?: number,
-      ): Promise<{ roomId: string; intent: string; status: string; query: string; hits: unknown[] }>;
-    };
-    if (roomId) {
-      const stub = env.ROOM.getByName(roomId) as unknown as SearchStub;
-      return JSON.stringify(await stub.searchTranscript(q, Number.isFinite(limit) ? limit : 40), null, 2);
-    }
-    const rooms = (await registry.listRooms(orgId)).slice(0, 25);
-    const perRoom = Math.max(3, Math.ceil((Number.isFinite(limit) ? limit : 40) / Math.max(rooms.length, 1)));
-    const batches = await Promise.all(
-      rooms.map(async (room) => {
-        try {
-          const stub = env.ROOM.getByName(room.id) as unknown as SearchStub;
-          const result = await stub.searchTranscript(q, perRoom);
-          return result.hits.map((hit) => ({ ...(hit as object), roomId: result.roomId, intent: result.intent }));
-        } catch {
-          return [];
-        }
-      }),
-    );
-    const hits = batches.flat().slice(0, Number.isFinite(limit) ? limit : 40);
-    return JSON.stringify({ query: q, hits, roomsSearched: rooms.length }, null, 2);
   }
   if (name === "twinmeet_post_message") {
     const roomId = String(args.roomId ?? "");
