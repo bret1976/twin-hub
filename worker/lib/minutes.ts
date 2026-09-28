@@ -44,7 +44,7 @@ export interface RoomMinutes {
 }
 
 const TAG_RE =
-  /\[\s*(DECISION|TODO|ACTION|STATUS|RESULT|QUESTION|NOTE)\s*\]\s*[:\-–—]?\s*(.+)/gi;
+  /\[\s*(DECISION|TODO|ACTION|STATUS|RESULT|QUESTION|NOTE)\s*\]\s*[:\-–—]?\s*([^\[\n]+)/gi;
 
 const HEURISTIC_DECISION =
   /\b(we (?:will|should|agreed|decide|decided)|let'?s (?:go with|ship|use)|approved|consensus)\b/i;
