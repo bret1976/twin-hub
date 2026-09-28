@@ -155,6 +155,7 @@ export interface Health {
   stripe?: boolean;
   speechTranscribe?: boolean;
   transcriptSearch?: boolean;
+  roomMinutes?: boolean;
 }
 
 export interface TranscriptHit {
@@ -311,7 +312,42 @@ export const api = {
     req<{ query: string; hits: TranscriptHit[]; roomsSearched: number }>(
       `/v1/transcripts/search?q=${encodeURIComponent(q)}&limit=${limit}`,
     ),
+  roomMinutes: (roomId: string) =>
+    req<{ minutes: RoomMinutes }>(`/v1/rooms/${roomId}/minutes`),
+  roomMinutesExportUrl: (roomId: string, format: "md" | "json" | "txt" = "md") =>
+    `/v1/rooms/${roomId}/minutes/export?format=${format}`,
 };
+
+export interface RoomMinutesItem {
+  kind: "decision" | "todo" | "status" | "result" | "question" | "note";
+  text: string;
+  authorName: string;
+  messageId: string;
+  createdAt: string;
+  source: string;
+}
+
+export interface RoomMinutes {
+  version: "minutes-v1";
+  roomId: string;
+  intent: string;
+  status: string;
+  generatedAt: string;
+  startedAt: string;
+  participants: string[];
+  roundCount: number;
+  messageCount: number;
+  overview: string;
+  decisions: RoomMinutesItem[];
+  actionItems: RoomMinutesItem[];
+  statusUpdates: RoomMinutesItem[];
+  results: RoomMinutesItem[];
+  openQuestions: RoomMinutesItem[];
+  artifacts: Array<{ id: string; kind: string; authorId: string; preview: string; createdAt: string }>;
+  votes: Array<{ voterName: string; subject: string; decision: string; createdAt: string }>;
+  summary: JointSummary | null;
+  timeline: Array<{ seq: number; authorName: string; type: string; body: string; createdAt: string }>;
+}
 
 function encodeURIContent(q: string): string {
   return encodeURIComponent(q);

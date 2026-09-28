@@ -6,6 +6,7 @@ import { geminiGenerate, twinMode } from "./lib/gemini";
 import { handleA2A, platformCard } from "./lib/a2a";
 import { handleMcp } from "./lib/mcp";
 import { handleEchoTwin } from "./lib/hooks";
+import { exportMinutes } from "./lib/minutes";
 import { createCheckoutSession, verifyStripeSignature } from "./lib/stripe";
 import { Registry } from "./durable-objects/registry";
 import { Room } from "./durable-objects/room";
@@ -58,6 +59,7 @@ interface RoomRpc {
       snippet: string;
     }>;
   }>;
+  getMinutes(): Promise<import("./lib/minutes").RoomMinutes>;
 }
 
 export { Registry, Room };
@@ -158,6 +160,7 @@ async function route(request: Request, env: Env): Promise<Response> {
       stripe: Boolean(env.STRIPE_SECRET_KEY),
       speechTranscribe: true,
       transcriptSearch: true,
+      roomMinutes: true,
       auth: true,
     });
   }
@@ -442,6 +445,28 @@ async function route(request: Request, env: Env): Promise<Response> {
     const limit = Number(url.searchParams.get("limit") || "40");
     const result = await roomStub(env, roomTranscriptSearch[1]).searchTranscript(q, Number.isFinite(limit) ? limit : 40);
     return json(result);
+  }
+
+  const roomMinutesExport = match(path, /^\/v1\/rooms\/([^/]+)\/minutes\/export$/);
+  if (roomMinutesExport && request.method === "GET") {
+    const minutes = await roomStub(env, roomMinutesExport[1]).getMinutes();
+    const raw = (url.searchParams.get("format") || "md").toLowerCase();
+    const format = raw === "json" || raw === "txt" ? raw : "md";
+    const exported = exportMinutes(minutes, format);
+    return new Response(exported.body, {
+      status: 200,
+      headers: {
+        "content-type": exported.contentType,
+        "content-disposition": `attachment; filename="${exported.filename}"`,
+        "cache-control": "no-store",
+      },
+    });
+  }
+
+  const roomMinutes = match(path, /^\/v1\/rooms\/([^/]+)\/minutes$/);
+  if (roomMinutes && request.method === "GET") {
+    const minutes = await roomStub(env, roomMinutes[1]).getMinutes();
+    return json({ minutes });
   }
 
   if (request.method === "GET" && path === "/v1/transcripts/search") {

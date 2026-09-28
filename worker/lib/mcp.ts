@@ -4,6 +4,7 @@ import { DEMO_ORG_ID } from "../types";
 import { toPublicAgent } from "./card";
 import { embedText } from "./embeddings";
 import { json, parseTags, readJson } from "./http";
+import { exportMinutes } from "./minutes";
 
 interface JsonRpc {
   jsonrpc?: string;
@@ -65,6 +66,18 @@ const TOOLS = [
         limit: { type: "number" },
       },
       required: ["q"],
+    },
+  },
+  {
+    name: "twinmeet_room_minutes",
+    description: "Build structured meeting minutes from a room transcript (decisions, actions, exportable markdown).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        roomId: { type: "string" },
+        format: { type: "string", enum: ["json", "md", "txt"], description: "Optional export format; default json object" },
+      },
+      required: ["roomId"],
     },
   },
   {
@@ -201,6 +214,17 @@ async function callTool(
     const roomId = String(args.roomId ?? "");
     const stub = env.ROOM.getByName(roomId) as unknown as { getSnapshot(): Promise<unknown> };
     return JSON.stringify(await stub.getSnapshot(), null, 2);
+  }
+  if (name === "twinmeet_room_minutes") {
+    const roomId = String(args.roomId ?? "").trim();
+    if (!roomId) throw new Error("roomId is required");
+    const format = String(args.format ?? "json").toLowerCase();
+    const stub = env.ROOM.getByName(roomId) as unknown as { getMinutes(): Promise<import("./minutes").RoomMinutes> };
+    const minutes = await stub.getMinutes();
+    if (format === "md" || format === "txt") {
+      return exportMinutes(minutes, format).body;
+    }
+    return JSON.stringify(minutes, null, 2);
   }
   if (name === "twinmeet_transcript_search") {
     const q = String(args.q ?? "").trim();

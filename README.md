@@ -98,6 +98,10 @@ With `GEMINI_API_KEY` set, the demo uses real Gemini turns (text is non-determin
 | `POST` | `/v1/meeting-requests/:id/accept` | Consent + open room |
 | `POST` | `/v1/meetings/start` | Seed + discover + accept in one call (free-text problem) |
 | `GET` | `/v1/rooms/:id` | Snapshot (members, votes, graph, summary, twinMode) |
+| `GET` | `/v1/rooms/:id/minutes` | Structured room minutes (decisions, actions, timeline) |
+| `GET` | `/v1/rooms/:id/minutes/export?format=md\|json\|txt` | Downloadable minutes export |
+| `GET` | `/v1/rooms/:id/transcript/search?q=` | In-room transcript search |
+| `GET` | `/v1/transcripts/search?q=` | Org-wide transcript search |
 | `GET` | `/v1/rooms/:id/ws` | WebSocket hub |
 | `POST` | `/v1/rooms/:id/vote` | Cast artifact/resolve vote |
 | `POST` | `/v1/rooms/:id/join` | Add another twin mid-meeting |
@@ -111,9 +115,9 @@ With `GEMINI_API_KEY` set, the demo uses real Gemini turns (text is non-determin
 | `POST` | `/v1/auth/register` `login` `demo` `logout` | Sessions (PBKDF2) |
 | `GET` | `/v1/auth/google` | Google OIDC start |
 | `GET/POST` | `/v1/billing` `checkout` `demo-activate` `webhook` | TwinMeet Pro |
-| `GET` | `/health` | Status booleans (`geminiConfigured`, `twinMode`) — never secret values |
+| `GET` | `/health` | Status booleans (`geminiConfigured`, `twinMode`, `transcriptSearch`, `roomMinutes`) — never secret values |
 
-MCP tools: `twinmeet_discover`, `twinmeet_list_agents`, `twinmeet_propose_meeting`, `twinmeet_room_snapshot`, `twinmeet_post_message`, `twinmeet_approve`.
+MCP tools: `twinmeet_discover`, `twinmeet_list_agents`, `twinmeet_propose_meeting`, `twinmeet_room_snapshot`, `twinmeet_transcript_search`, `twinmeet_room_minutes`, `twinmeet_post_message`, `twinmeet_approve`.
 
 ## Deploy
 

@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import { newId, nowIso } from "../lib/http";
 import { sanitizePeerText } from "../lib/sanitize";
 import { generateSummary } from "../lib/summary";
+import { buildRoomMinutes, type RoomMinutes } from "../lib/minutes";
 import { callTwinWebhook } from "../lib/callback";
 import { GeminiHttpError, twinMode } from "../lib/gemini";
 import { runAnyTwin } from "../twins/dispatch";
@@ -483,7 +484,11 @@ export class Room extends DurableObject<Env> {
    * Full-text-ish transcript search over room messages (SQLite LIKE + token ranking).
    * Inspired by MiniSearch / Fuse.js ranking ideas — original implementation, no vendored code.
    */
-  async searchTranscript(
+  async getMinutes(): Promise<RoomMinutes> {
+    return buildRoomMinutes(this.snapshot());
+  }
+
+    async searchTranscript(
     query: string,
     limit = 40,
   ): Promise<{
